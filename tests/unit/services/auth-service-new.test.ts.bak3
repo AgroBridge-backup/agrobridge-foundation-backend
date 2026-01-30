@@ -1,0 +1,89 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { AuthService } from '../src/services/auth-service';
+import { createMockPrismaClient } from '../mocks/prisma-mock';
+import { adminUserFixtures } from '../fixtures/data-fixtures';
+import { Errors } from '../src/errors/app-error';
+import bcrypt from 'bcryptjs';
+
+describe('AuthService', () => {
+  let mockPrisma: any;
+  let svc: AuthService;
+  const mockAdminUsers: any = {
+    findByEmail: vi.fn(),
+    updateLastLogin: vi.fn(),
+  };
+
+  beforeEach(() => {
+    mockPrisma = createMockPrismaClient();
+    svc = new AuthService(mockAdminUsers);
+    vi.clearAllMocks();
+  });
+
+  describe('login', () => {
+    it('should login successfully with valid credentials', async () => {
+      mockAdminUsers.findByEmail.mockResolvedValue(adminUserFixtures.admin);
+      vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+
+      const result = await svc.login({
+        email: 'admin@agrobridge.org',
+        password: 'valid-password',
+      });
+
+      expect(mockAdminUsers.findByEmail).toHaveBeenCalledWith('admin@agrobridge.org');
+      expect(mockAdminUsers.updateLastLogin).toHaveBeenCalledWith(
+        adminUserFixtures.admin.id,
+        expect.any(Date),
+      );
+      expect(result).toEqual({
+        adminUserId: adminUserFixtures.admin.id,
+        email: adminUserFixtures.admin.email,
+        role: adminUserFixtures.admin.role,
+      });
+    });
+
+    it('should lowercase and trim email', async () => {
+      mockAdminUsers.findByEmail.mockResolvedValue(adminUserFixtures.admin);
+      vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+
+      await svc.login({
+        email: '  ADMIN@AGROBRIDGE.ORG  ',
+        password: 'valid-password',
+      });
+
+      expect(mockAdminUsers.findByEmail).toHaveBeenCalledWith('admin@agrobridge.org');
+    });
+
+    it('should throw unauthorized if user not found', async () => {
+      mockAdminUsers.findByEmail.mockResolvedValue(null);
+
+      await expect(
+        svc.login({
+          email: 'nonexistent@example.com',
+          password: 'password',
+        }),
+      ).rejects.toMatchObject({
+        statusCode: 401,
+        code: 'UNAUTHORIZED',
+      });
+
+      expect(mockAdminUsers.updateLastLogin).not.toHaveBeenCalled();
+    });
+
+    it('should throw unauthorized if password is incorrect', async () => {
+      mockAdminUsers.findByEmail.mockResolvedValue(adminUserFixtures.admin);
+      vi.spyOn(bcrypt, 'compare').mockResolvedValue(false);
+
+      await expect(
+        svc.login({
+          email: 'admin@agrobridge.org',
+          password: 'wrong-password',
+        }),
+      ).rejects.toMatchObject({
+        statusCode: 401,
+        code: 'UNAUTHORIZED',
+      });
+
+      expect(mockAdminUsers.updateLastLogin).not.toHaveBeenCalled();
+    });
+  });
+});

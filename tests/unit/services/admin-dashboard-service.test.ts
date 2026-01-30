@@ -1,0 +1,147 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { AdminDashboardService } from '../../src/services/admin-dashboard-service.js';
+import { createMockPrismaClient } from '../mocks/prisma-mock.js';
+import { donationFixtures } from '../fixtures/data-fixtures.js';
+import { Errors } from '../../src/errors/app-error.js';
+
+describe('AdminDashboardService', () => {
+  let mockPrisma: any;
+  let svc: AdminDashboardService;
+  const mockDonations: any = {
+    dashboardMetrics: vi.fn(),
+  };
+
+  beforeEach(() => {
+    mockPrisma = createMockPrismaClient();
+    svc = new AdminDashboardService(mockDonations);
+    vi.clearAllMocks();
+  });
+
+  describe('getMetrics', () => {
+    it('should return cached metrics if available', async () => {
+      const cachedMetrics = {
+        totalRaised: 15000,
+        donationCount: 2,
+        donorCount: 2,
+        lastDonationAt: new Date('2024-01-01T00:00:00Z'),
+      };
+      mockDonations.dashboardMetrics.mockResolvedValue({
+        succeededAgg: { _sum: { amount: 15000 }, _count: { _all: 2 } },
+        donationCount: 2,
+        donorCount: 2,
+        lastDonation: donationFixtures.succeeded,
+      });
+
+      const firstCall = await svc.getMetrics({ ttlMs: 15000 });
+      const secondCall = await svc.getMetrics({ ttlMs: 15000 });
+
+      expect(firstCall).toEqual(cachedMetrics);
+      expect(secondCall).toEqual(cachedMetrics);
+      expect(mockDonations.dashboardMetrics).toHaveBeenCalledTimes(1);
+    });
+
+    it('should refresh cache after TTL expires', async () => {
+      mockDonations.dashboardMetrics.mockResolvedValue({
+        succeededAgg: { _sum: { amount: 15000 }, _count: { _all: 2 } },
+        donationCount: 2,
+        donorCount: 2,
+        lastDonation: donationFixtures.succeeded,
+      });
+
+      await svc.getMetrics({ ttlMs: 0 });
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      await svc.getMetrics({ ttlMs: 0 });
+
+      expect(mockDonations.dashboardMetrics).toHaveBeenCalledTimes(2);
+    }, 10000);
+
+    it('should calculate metrics correctly from database', async () => {
+      mockDonations.dashboardMetrics.mockResolvedValue({
+        succeededAgg: { _sum: { amount: 15000 }, _count: { _all: 2 } },
+        donationCount: 3,
+        donorCount: 2,
+        lastDonation: donationFixtures.succeeded,
+      });
+
+      const metrics = await svc.getMetrics({ ttlMs: 15000 });
+
+      expect(metrics).toEqual({
+        totalRaised: 15000,
+        donationCount: 3,
+        donorCount: 2,
+        lastDonationAt: donationFixtures.succeeded.createdAt,
+      });
+    });
+
+    it('should handle empty database', async () => {
+      mockDonations.dashboardMetrics.mockResolvedValue({
+        succeededAgg: { _sum: { amount: null }, _count: { _all: 0 } },
+        donationCount: 0,
+        donorCount: 0,
+        lastDonation: null,
+      });
+
+      const metrics = await svc.getMetrics({ ttlMs: 15000 });
+
+      expect(metrics).toEqual({
+        totalRaised: 0,
+        donationCount: 0,
+        donorCount: 0,
+        lastDonationAt: null,
+      });
+    });
+
+    it('should use default TTL of 15 seconds', async () => {
+      mockDonations.dashboardMetrics.mockResolvedValue({
+        succeededAgg: { _sum: { amount: 0 }, _count: { _all: 0 } },
+        donationCount: 0,
+        donorCount: 0,
+        lastDonation: null,
+      });
+
+      await svc.getMetrics();
+
+      expect(mockDonations.dashboardMetrics).toHaveBeenCalled();
+    });
+
+    it('should validate ttlMs is positive integer', async () => {
+      mockDonations.dashboardMetrics.mockResolvedValue({
+        succeededAgg: { _sum: { amount: 0 }, _count: { _all: 0 } },
+        donationCount: 0,
+        donorCount: 0,
+        lastDonation: null,
+      });
+
+      await expect(svc.getMetrics({ ttlMs: -1 })).rejects.toMatchObject({
+        statusCode: 422,
+        code: 'VALIDATION_ERROR',
+      });
+
+      await expect(svc.getMetrics({ ttlMs: 0 })).rejects.toMatchObject({
+        statusCode: 422,
+        code: 'VALIDATION_ERROR',
+      });
+
+      await expect(svc.getMetrics({ ttlMs: 100.5 })).rejects.toMatchObject({
+        statusCode: 422,
+        code: 'VALIDATION_ERROR',
+      });
+    });
+
+    it('should validate ttlMs max value', async () => {
+      mockDonations.dashboardMetrics.mockResolvedValue({
+        succeededAgg: { _sum: { amount: 0 }, _count: { _all: 0 } },
+        donationCount: 0,
+        donorCount: 0,
+        lastDonation: null,
+      });
+
+      await expect(svc.getMetrics({ ttlMs: 60_001 })).rejects.toMatchObject({
+        statusCode: 422,
+        code: 'VALIDATION_ERROR',
+      });
+    });
+  });
+});

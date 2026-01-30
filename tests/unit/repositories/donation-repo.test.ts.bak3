@@ -1,0 +1,324 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { DonationRepository } from '../src/repositories/donation-repo';
+import { createMockPrismaClient } from '../mocks/prisma-mock';
+import { donationFixtures } from '../fixtures/data-fixtures';
+import { AppError } from '../src/errors/app-error';
+
+describe('DonationRepository', () => {
+  let mockPrisma: any;
+  let repo: DonationRepository;
+
+  beforeEach(() => {
+    mockPrisma = createMockPrismaClient();
+    repo = new DonationRepository(mockPrisma);
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  describe('createPending', () => {
+    it('should create donation with PENDING status', async () => {
+      mockPrisma.donation.create.mockResolvedValue(donationFixtures.pending);
+
+      const result = await repo.createPending({
+        amount: 5000,
+        currency: 'usd',
+        donorEmail: 'donor@example.com',
+        metadata: { campaign: 'mvp' },
+      });
+
+      expect(mockPrisma.donation.create).toHaveBeenCalledWith({
+        data: {
+          amount: 5000,
+          currency: 'usd',
+          status: 'PENDING',
+          donorEmail: 'donor@example.com',
+          metadata: { campaign: 'mvp' },
+        },
+      });
+      expect(result).toEqual(donationFixtures.pending);
+    });
+
+    it('should create donation with null donorEmail if not provided', async () => {
+      mockPrisma.donation.create.mockResolvedValue({
+        ...donationFixtures.pending,
+        donorEmail: null,
+      });
+
+      await repo.createPending({
+        amount: 5000,
+        currency: 'usd',
+      });
+
+      expect(mockPrisma.donation.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          donorEmail: null,
+        }),
+      });
+    });
+
+    it('should create donation with null metadata if not provided', async () => {
+      mockPrisma.donation.create.mockResolvedValue({
+        ...donationFixtures.pending,
+        metadata: null,
+      });
+
+      await repo.createPending({
+        amount: 5000,
+        currency: 'usd',
+      });
+
+      expect(mockPrisma.donation.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          metadata: null,
+        }),
+      });
+    });
+  });
+
+  describe('attachStripeSession', () => {
+    it('should attach stripe session ID to donation', async () => {
+      mockPrisma.donation.update.mockResolvedValue({
+        ...donationFixtures.pending,
+        stripeSessionId: 'cs_123',
+      });
+
+      const result = await repo.attachStripeSession(
+        '123e4567-e89b-12d3-a456-426614174000',
+        'cs_123',
+      );
+
+      expect(mockPrisma.donation.update).toHaveBeenCalledWith({
+        where: { id: '123e4567-e89b-12d3-a456-426614174000' },
+        data: { stripeSessionId: 'cs_123' },
+      });
+      expect(result.stripeSessionId).toBe('cs_123');
+    });
+  });
+
+  describe('updateStatusByStripeSessionId', () => {
+    it('should update donation status by stripe session ID', async () => {
+      mockPrisma.donation.updateMany.mockResolvedValue({ count: 1 });
+
+      const result = await repo.updateStatusByStripeSessionId('cs_123', 'SUCCEEDED');
+
+      expect(mockPrisma.donation.updateMany).toHaveBeenCalledWith({
+        where: { stripeSessionId: 'cs_123' },
+        data: { status: 'SUCCEEDED' },
+      });
+      expect(result.count).toBe(1);
+    });
+
+    it('should return count: 0 if no matching donation found', async () => {
+      mockPrisma.donation.updateMany.mockResolvedValue({ count: 0 });
+
+      const result = await repo.updateStatusByStripeSessionId('cs_nonexistent', 'SUCCEEDED');
+
+      expect(result.count).toBe(0);
+    });
+  });
+
+  describe('listPaged', () => {
+    it('should list donations with pagination', async () => {
+      mockPrisma.$transaction.mockResolvedValue([[donationFixtures.pending], { count: 1 }]);
+
+      const result = await repo.listPaged({
+        page: 1,
+        pageSize: 25,
+        filters: {},
+        sort: { field: 'createdAt', direction: 'desc' },
+      });
+
+      expect(mockPrisma.$transaction).toHaveBeenCalled();
+      expect(result[0]).toEqual([donationFixtures.pending]);
+      expect(result[1]).toEqual({ count: 1 });
+    });
+
+    it('should filter by status', async () => {
+      mockPrisma.$transaction.mockResolvedValue([[donationFixtures.succeeded], { count: 1 }]);
+
+      await repo.listPaged({
+        page: 1,
+        pageSize: 25,
+        filters: { status: 'SUCCEEDED' },
+        sort: { field: 'createdAt', direction: 'desc' },
+      });
+
+      expect(mockPrisma.donation.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { status: 'SUCCEEDED' },
+        }),
+      );
+    });
+
+    it('should calculate correct skip offset', async () => {
+      mockPrisma.$transaction.mockResolvedValue([[], { count: 0 }]);
+
+      await repo.listPaged({
+        page: 3,
+        pageSize: 50,
+        filters: {},
+        sort: { field: 'createdAt', direction: 'asc' },
+      });
+
+      expect(mockPrisma.donation.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          skip: 100, // (3 - 1) * 50
+        }),
+      );
+    });
+  });
+
+  describe('listCursor', () => {
+    it('should list donations with cursor pagination', async () => {
+      mockPrisma.donation.findMany.mockResolvedValue([
+        donationFixtures.pending,
+        donationFixtures.succeeded,
+      ]);
+
+      const result = await repo.listCursor({
+        pageSize: 25,
+        cursor: undefined,
+        filters: {},
+        direction: 'desc',
+      });
+
+      expect(mockPrisma.donation.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          take: 25,
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        }),
+      );
+      expect(result.items).toHaveLength(2);
+      expect(result.nextCursor).toEqual({
+        createdAt: donationFixtures.succeeded.createdAt,
+        id: donationFixtures.succeeded.id,
+      });
+    });
+
+    it('should return null nextCursor when no items', async () => {
+      mockPrisma.donation.findMany.mockResolvedValue([]);
+
+      const result = await repo.listCursor({
+        pageSize: 25,
+        cursor: undefined,
+        filters: {},
+        direction: 'desc',
+      });
+
+      expect(result.items).toHaveLength(0);
+      expect(result.nextCursor).toBeNull();
+    });
+
+    it('should use cursor filter for descending direction', async () => {
+      const cursor = {
+        createdAt: new Date('2024-01-01T00:00:00Z'),
+        id: '123e4567-e89b-12d3-a456-426614174000',
+      };
+      mockPrisma.donation.findMany.mockResolvedValue([]);
+
+      await repo.listCursor({
+        pageSize: 25,
+        cursor,
+        filters: {},
+        direction: 'desc',
+      });
+
+      expect(mockPrisma.donation.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            OR: [
+              { createdAt: { lt: cursor.createdAt } },
+              { createdAt: cursor.createdAt, id: { lt: cursor.id } },
+            ],
+          },
+        }),
+      );
+    });
+
+    it('should use cursor filter for ascending direction', async () => {
+      const cursor = {
+        createdAt: new Date('2024-01-01T00:00:00Z'),
+        id: '123e4567-e89b-12d3-a456-426614174000',
+      };
+      mockPrisma.donation.findMany.mockResolvedValue([]);
+
+      await repo.listCursor({
+        pageSize: 25,
+        cursor,
+        filters: {},
+        direction: 'asc',
+      });
+
+      expect(mockPrisma.donation.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            OR: [
+              { createdAt: { gt: cursor.createdAt } },
+              { createdAt: cursor.createdAt, id: { gt: cursor.id } },
+            ],
+          },
+        }),
+      );
+    });
+
+    it('should filter by status', async () => {
+      mockPrisma.donation.findMany.mockResolvedValue([]);
+
+      await repo.listCursor({
+        pageSize: 25,
+        cursor: undefined,
+        filters: { status: 'SUCCEEDED' },
+        direction: 'desc',
+      });
+
+      expect(mockPrisma.donation.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { status: 'SUCCEEDED' },
+        }),
+      );
+    });
+  });
+
+  describe('dashboardMetrics', () => {
+    it('should return dashboard metrics', async () => {
+      mockPrisma.$transaction.mockResolvedValue([
+        {
+          _sum: { amount: 15000 },
+          _count: { _all: 2 },
+        },
+        3,
+        donationFixtures.succeeded,
+        [{ count: BigInt(2) }],
+      ]);
+
+      const result = await repo.dashboardMetrics();
+
+      expect(result.donationCount).toBe(3);
+      expect(result.succeededAgg._sum.amount).toBe(15000);
+      expect(result.donorCount).toBe(2);
+      expect(result.lastDonation).toEqual(donationFixtures.succeeded);
+    });
+
+    it('should handle empty database', async () => {
+      mockPrisma.$transaction.mockResolvedValue([
+        {
+          _sum: { amount: null },
+          _count: { _all: 0 },
+        },
+        0,
+        null,
+        [{ count: BigInt(0) }],
+      ]);
+
+      const result = await repo.dashboardMetrics();
+
+      expect(result.donationCount).toBe(0);
+      expect(result.succeededAgg._sum.amount).toBeNull();
+      expect(result.donorCount).toBe(0);
+      expect(result.lastDonation).toBeNull();
+    });
+  });
+});

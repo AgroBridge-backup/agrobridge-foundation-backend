@@ -1,0 +1,54 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { AdminUserRepository } from '../src/repositories/admin-user-repo';
+import { createMockPrismaClient } from '../mocks/prisma-mock';
+import { adminUserFixtures } from '../fixtures/data-fixtures';
+
+describe('AdminUserRepository', () => {
+  let mockPrisma: any;
+  let repo: AdminUserRepository;
+
+  beforeEach(() => {
+    mockPrisma = createMockPrismaClient();
+    repo = new AdminUserRepository(mockPrisma);
+    vi.clearAllMocks();
+  });
+
+  describe('findByEmail', () => {
+    it('should find admin user by email', async () => {
+      mockPrisma.adminUser.findUnique.mockResolvedValue(adminUserFixtures.admin);
+
+      const result = await repo.findByEmail('admin@agrobridge.org');
+
+      expect(mockPrisma.adminUser.findUnique).toHaveBeenCalledWith({
+        where: { email: 'admin@agrobridge.org' },
+      });
+      expect(result).toEqual(adminUserFixtures.admin);
+    });
+
+    it('should return null if admin not found', async () => {
+      mockPrisma.adminUser.findUnique.mockResolvedValue(null);
+
+      const result = await repo.findByEmail('nonexistent@example.com');
+
+      expect(result).toBeNull();
+    });
+  });
+
+  describe('updateLastLogin', () => {
+    it('should update last login timestamp', async () => {
+      const lastLoginAt = new Date('2024-01-01T00:00:00Z');
+      mockPrisma.adminUser.update.mockResolvedValue({
+        ...adminUserFixtures.admin,
+        lastLoginAt,
+      });
+
+      const result = await repo.updateLastLogin('admin-123', lastLoginAt);
+
+      expect(mockPrisma.adminUser.update).toHaveBeenCalledWith({
+        where: { id: 'admin-123' },
+        data: { lastLoginAt },
+      });
+      expect(result.lastLoginAt).toEqual(lastLoginAt);
+    });
+  });
+});
