@@ -1,0 +1,9 @@
+node_modules
+dist
+.env
+.env.*
+coverage
+.vitest
+.DS_Store
+prisma/dev.db
+prisma/migrations
