@@ -1,0 +1,57 @@
+groups:
+  - name: agrobridge-alerts
+    interval: 30s
+    rules:
+      - alert: HighErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{status=~"5.."}[5m]))
+            /
+            sum(rate(http_requests_total[5m]))
+          ) > 0.01
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: 'High error rate detected'
+          description: 'Error rate is {{ $value | humanizePercentage }} for the last 5 minutes'
+
+      - alert: HighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(http_request_duration_seconds_bucket[5m])) by (le)
+          ) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: 'High latency detected'
+          description: 'p95 latency is {{ $value }}s for the last 5 minutes'
+
+      - alert: NoDonationsInLastHour
+        expr: |
+          increase(donations_created_total[1h]) == 0
+        for: 1h
+        labels:
+          severity: warning
+          team: business
+        annotations:
+          summary: 'No donations created in the last hour'
+          description: 'This may indicate an issue with Stripe integration'
+
+      - alert: HighFailedLoginRate
+        expr: |
+          (
+            sum(rate(admin_login_total{status="failed"}[5m]))
+            /
+            sum(rate(admin_login_total[5m]))
+          ) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: 'High rate of failed admin logins'
+          description: 'Failed login rate is {{ $value | humanizePercentage }}'

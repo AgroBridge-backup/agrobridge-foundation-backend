@@ -1,0 +1,186 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: rate-limiting-service
+  labels:
+    app: rate-limiting
+spec:
+  selector:
+    app: rate-limiting
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+    - name: grpc
+      port: 9090
+      targetPort: 9090
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rate-limiting-service
+  labels:
+    app: rate-limiting
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: rate-limiting
+  template:
+    metadata:
+      labels:
+        app: rate-limiting
+        version: v1
+    spec:
+      containers:
+        - name: rate-limiting
+          image: agrobridge/rate-limiting:latest
+          ports:
+            - containerPort: 8080
+              name: http
+            - containerPort: 9090
+              name: grpc
+          env:
+            - name: REDIS_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: rate-limiting-config
+                  key: redis-host
+            - name: REDIS_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: rate-limiting-config
+                  key: redis-port
+            - name: ENVIRONMENT
+              value: 'production'
+            - name: SERVICE_NAME
+              value: 'rate-limiting-service'
+            - name: AWS_REGION
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['topology.kubernetes.io/zone']
+          resources:
+            requests:
+              memory: '256Mi'
+              cpu: '250m'
+            limits:
+              memory: '512Mi'
+              cpu: '500m'
+          livenessProbe:
+            httpGet:
+              path: /health/rate-limit
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health/rate-limit/deep
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: rate-limiting-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: rate-limiting-service
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+    - type: Pods
+      pods:
+        metric:
+          name: rate_limit_checks_per_second
+        target:
+          type: AverageValue
+          averageValue: '5000'
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: rate-limiting-pdb
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: rate-limiting
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: rate-limiting-vs
+spec:
+  hosts:
+    - rate-limiting-service
+  http:
+    - match:
+        - uri:
+            prefix: /
+      route:
+        - destination:
+            host: rate-limiting-service
+            subset: v1
+      timeout: 5s
+      retries:
+        attempts: 3
+        perTryTimeout: 2s
+      # Fault injection removed for production deployment
+      # To enable for testing, uncomment and configure:
+      # fault:
+      #   delay:
+      #     percentage:
+      #       value: 0.0  # Disabled
+      #     fixedDelay: 10ms
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+  name: rate-limiting-dr
+spec:
+  host: rate-limiting-service
+  trafficPolicy:
+    loadBalancer:
+      simple: LEAST_CONN
+    outlierDetection:
+      consecutiveErrors: 5
+      interval: 30s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+      minHealthPercent: 40
+  subsets:
+    - name: v1
+      labels:
+        version: v1
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rate-limiting-config
+data:
+  redis-host: 'redis-cluster-0.redis-cluster'
+  redis-port: '6379'
+  circuit-breaker-threshold: '5'
+  circuit-breaker-cooldown: '60000'
+  max-pool-size: '10'
+  connection-timeout: '30000'

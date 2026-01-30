@@ -1,0 +1,235 @@
+groups:
+  - name: rate_limiting
+    interval: 30s
+    rules:
+      - alert: HighRateLimitErrorRate
+        expr: |
+          (
+            rate(rate_limit_errors_total[5m])
+            /
+            clamp_min(rate(rate_limit_checks_total[5m]), 1)
+          ) > 0.01
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: 'High rate limit error rate detected'
+          description: 'Error rate: {{ $value | humanizePercentage }} of total requests for the last 5 minutes'
+          runbook_url: 'https://docs.agrobridge.org/runbooks/rate-limiting#high-error-rate'
+
+      - alert: CriticalRateLimitErrorRate
+        expr: |
+          (
+            rate(rate_limit_errors_total[5m])
+            /
+            clamp_min(rate(rate_limit_checks_total[5m]), 1)
+          ) > 0.05
+        for: 1m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: 'CRITICAL: Very high rate limit error rate'
+          description: 'Error rate: {{ $value | humanizePercentage }} of total requests for the last 5 minutes'
+          runbook_url: 'https://docs.agrobridge.org/runbooks/rate-limiting#high-error-rate'
+
+      - alert: RateLimitErrorVolume
+        expr: rate(rate_limit_errors_total[5m]) > 100
+        for: 1m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: 'High volume of rate limit errors'
+          description: '{{ $value | humanize }}/s errors - check for system-wide issues'
+          runbook_url: 'https://docs.agrobridge.org/runbooks/rate-limiting#high-error-rate'
+
+      - alert: RateLimitFallbackActive
+        expr: |
+          rate(rate_limit_fallbacks_total[5m]) > 5 or
+          rate_limit_redis_unavailable > 0
+        for: 2m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: 'Rate limit fallback is active'
+          description: 'Fallback rate: {{ $value | humanize }}/s or Redis unavailable. Check Redis connectivity immediately.'
+          runbook_url: 'https://docs.agrobridge.org/runbooks/rate-limiting#rate-limit-fallback-active'
+
+      - alert: RateLimitLatencyHigh
+        expr: |
+          histogram_quantile(0.99, rate(rate_limit_check_duration_seconds_bucket[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: 'High rate limit latency detected'
+          description: 'P99 latency: {{ $value | humanizeDuration }} for the last 5 minutes'
+          runbook_url: 'https://docs.agrobridge.org/runbooks/rate-limiting#high-latency'
+
+      - alert: RateLimitLatencyCritical
+        expr: |
+          histogram_quantile(0.99, rate(rate_limit_check_duration_seconds_bucket[5m])) > 1
+        for: 2m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: 'Critical rate limit latency detected'
+          description: 'P99 latency: {{ $value | humanizeDuration }} for the last 2 minutes'
+          runbook_url: 'https://docs.agrobridge.org/runbooks/rate-limiting#high-latency'
+
+      - alert: CircuitBreakerOpen
+        expr: rate_limit_circuit_breaker_open > 0.5
+        for: 10m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: 'Circuit breaker open on >50% of nodes'
+          description: '{{ $value | humanizePercentage }} of rate limiters have circuit breaker open'
+          runbook_url: 'https://docs.agrobridge.org/runbooks/rate-limiting#circuit-breaker-open'
+
+      - alert: CircuitBreakerOpenWarning
+        expr: rate_limit_circuit_breaker_open > 0.3
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: 'Circuit breaker open on >30% of nodes'
+          description: '{{ $value | humanizePercentage }} of rate limiters have circuit breaker open'
+          runbook_url: 'https://docs.agrobridge.org/runbooks/rate-limiting#circuit-breaker-open'
+
+      - alert: RateLimitServiceUnhealthy
+        expr: rate_limit_healthy < 1
+        for: 2m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: 'Rate limiting service is unhealthy'
+          description: 'Health check failing for 2 minutes'
+          runbook_url: 'https://docs.agrobridge.org/runbooks/rate-limiting#rate-limit-service-unhealthy'
+
+      - alert: RateLimitRedisUnavailable
+        expr: |
+          rate_limit_redis_unavailable > 0
+        for: 1m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: 'Redis unavailable for rate limiting'
+          description: 'Rate limiting is using in-memory fallback for {{ $value | humanize }} instances. Check Redis connectivity immediately.'
+          runbook_url: 'https://docs.agrobridge.org/runbooks/rate-limiting#redis-unavailable'
+
+      - alert: RateLimitHighRejectionRate
+        expr: |
+          sum(rate(rate_limit_checks_total{allowed="false"}[5m])) by (tier)
+          /
+          clamp_min(sum(rate(rate_limit_checks_total[5m])) by (tier), 1) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: 'High rate limit rejection rate for tier {{ $labels.tier }}'
+          description: 'Rejection rate: {{ $value | humanizePercentage }} for tier {{ $labels.tier }}'
+          runbook_url: 'https://docs.agrobridge.org/runbooks/rate-limiting#high-rejection-rate'
+
+      - alert: RateLimitMemoryUsageHigh
+        expr: |
+          rate_limit_memory_usage_bytes{instance=~"rate-limiter.*"} / 1024 / 1024 > 1000
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: 'High memory usage in rate limiter'
+          description: 'Memory usage: {{ $value | humanize1024 }}B'
+          runbook_url: 'https://docs.agrobridge.org/runbooks/rate-limiting#high-memory-usage'
+
+      - alert: RateLimitMemoryUsageCritical
+        expr: |
+          rate_limit_memory_usage_bytes{instance=~"rate-limiter.*"} / 1024 / 1024 > 2000
+        for: 2m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: 'Critical memory usage in rate limiter'
+          description: 'Memory usage: {{ $value | humanize1024 }}B - risk of OOM'
+          runbook_url: 'https://docs.agrobridge.org/runbooks/rate-limiting#high-memory-usage'
+
+      - alert: RateLimitThroughputAnomaly
+        expr: |
+          abs(
+            rate(rate_limit_checks_total[5m])
+            -
+            rate(rate_limit_checks_total[1h] offset 5m)
+          )
+          /
+          clamp_min(rate(rate_limit_checks_total[1h] offset 5m), 1) > 0.5
+        for: 10m
+        labels:
+          severity: info
+          team: platform
+        annotations:
+          summary: 'Rate limit throughput anomaly detected'
+          description: 'Current throughput is {{ $value | humanizePercentage }} different from 1-hour average'
+          runbook_url: 'https://docs.agrobridge.org/runbooks/rate-limiting#throughput-anomaly'
+
+      - alert: RedisConnectionPoolExhausted
+        expr: |
+          redis_connection_pool_active{service="rate-limiting"}
+          >=
+          redis_connection_pool_max{service="rate-limiting"} * 0.9
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+          redis: 'true'
+        annotations:
+          summary: 'Redis connection pool nearly exhausted'
+          description: 'Active connections: {{ $value | humanize }} / {{ $labels.redis_connection_pool_max | humanize }}'
+          runbook_url: 'https://docs.agrobridge.org/runbooks/rate-limiting#redis-connection-issues'
+
+  - name: rate_limiting_recording
+    interval: 30s
+    rules:
+      - record: rate_limit_checks_per_second
+        expr: sum(rate(rate_limit_checks_total[5m])) by (tier, store_type)
+
+      - record: rate_limit_allowed_per_second
+        expr: sum(rate(rate_limit_checks_total{allowed="true"}[5m])) by (tier, store_type)
+
+      - record: rate_limit_rejected_per_second
+        expr: sum(rate(rate_limit_checks_total{allowed="false"}[5m])) by (tier, store_type)
+
+      - record: rate_limit_rejection_rate
+        expr: |
+          sum(rate(rate_limit_checks_total{allowed="false"}[5m])) by (tier)
+          /
+          clamp_min(sum(rate(rate_limit_checks_total[5m])) by (tier), 1)
+
+      - record: rate_limit_latency_p50
+        expr: histogram_quantile(0.50, rate(rate_limit_check_duration_seconds_bucket[5m]))
+
+      - record: rate_limit_latency_p95
+        expr: histogram_quantile(0.95, rate(rate_limit_check_duration_seconds_bucket[5m]))
+
+      - record: rate_limit_latency_p99
+        expr: histogram_quantile(0.99, rate(rate_limit_check_duration_seconds_bucket[5m]))
+
+      - record: rate_limit_fallback_rate
+        expr: rate(rate_limit_fallbacks_total[5m])
+
+      - record: rate_limit_error_rate
+        expr: rate(rate_limit_errors_total[5m])
+
+      - record: rate_limit_error_rate_by_type
+        expr: rate(rate_limit_errors_total[5m]) by (error_type)
