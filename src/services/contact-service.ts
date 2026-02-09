@@ -16,6 +16,9 @@ const contactSchema = z.object({
   name: z.string().trim().min(1).max(140),
   email: z.string().trim().email().max(254),
   message: z.string().trim().min(1).max(5000),
+  // Source tracking from frontend
+  source: z.string().max(100).optional(),
+  page: z.string().max(500).optional(),
   // Honeypot fields - should be empty/valid for real users
   website: z.string().max(0).optional().default(''), // Must be empty
   _gotcha: z.string().max(0).optional().default(''), // Alternative honeypot

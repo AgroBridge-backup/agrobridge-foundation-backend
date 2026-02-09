@@ -27,6 +27,7 @@ describe('StripeService', () => {
       donationId: 'd1',
       amount: 5000,
       currency: 'usd',
+      frequency: 'one-time',
       successUrl: 'https://example.com/s',
       cancelUrl: 'https://example.com/c',
     });

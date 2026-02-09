@@ -25,6 +25,7 @@ export class DonationRepository {
     isAnonymous?: boolean;
     message?: string;
     campaignId?: string;
+    type?: 'ONE_TIME' | 'RECURRING';
     metadata?: Prisma.InputJsonValue;
   }) {
     return withDbSpan({
@@ -37,7 +38,7 @@ export class DonationRepository {
             amount: input.amount,
             currency: input.currency,
             status: 'PENDING',
-            type: 'ONE_TIME',
+            type: input.type ?? 'ONE_TIME',
             donorEmail: input.donorEmail ?? null,
             donorName: input.donorName ?? null,
             isAnonymous: input.isAnonymous ?? false,

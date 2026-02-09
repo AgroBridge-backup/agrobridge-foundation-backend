@@ -4,15 +4,29 @@ import { z } from 'zod';
 import { Errors } from '../errors/app-error.js';
 import { DonationRepository } from '../repositories/donation-repo.js';
 
+const frequencySchema = z.enum(['one-time', 'monthly']).default('one-time');
+
 const intentSchema = z.object({
   amount: z.number().int().positive(),
   currency: z.string().trim().toLowerCase().length(3).default('usd'),
+  // Accept both `donorEmail` (native) and `email` (frontend alias)
   donorEmail: z.string().trim().email().max(254).optional(),
+  email: z.string().trim().email().max(254).optional(),
   donorName: z.string().trim().min(1).max(200).optional(),
   isAnonymous: z.boolean().default(false),
   message: z.string().trim().max(500).optional(),
   campaignId: z.string().uuid().optional(),
+  frequency: frequencySchema,
+  successUrl: z.string().url().optional(),
+  cancelUrl: z.string().url().optional(),
+  source: z.string().max(100).optional(),
   metadata: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
+}).transform((data) => {
+  // Merge `email` into `donorEmail` (donorEmail takes precedence)
+  const donorEmail = data.donorEmail ?? data.email;
+  // Map frequency to donation type
+  const type: 'ONE_TIME' | 'RECURRING' = data.frequency === 'monthly' ? 'RECURRING' : 'ONE_TIME';
+  return { ...data, donorEmail, type };
 });
 
 export class DonationService {
@@ -26,24 +40,27 @@ export class DonationService {
         const parsed = intentSchema.safeParse(input);
         if (!parsed.success) throw Errors.validation(parsed.error.flatten());
 
-        span.setAttribute('donation.amount', parsed.data.amount);
-        span.setAttribute('donation.currency', parsed.data.currency);
-        span.setAttribute('donation.has_donor_email', Boolean(parsed.data.donorEmail));
-        span.setAttribute('donation.has_campaign', Boolean(parsed.data.campaignId));
-        span.setAttribute('donation.is_anonymous', parsed.data.isAnonymous);
+        const { donorEmail, type, amount, currency, isAnonymous, donorName, message, campaignId, metadata, frequency, successUrl, cancelUrl, source } = parsed.data;
+
+        span.setAttribute('donation.amount', amount);
+        span.setAttribute('donation.currency', currency);
+        span.setAttribute('donation.has_donor_email', Boolean(donorEmail));
+        span.setAttribute('donation.has_campaign', Boolean(campaignId));
+        span.setAttribute('donation.is_anonymous', isAnonymous);
+        span.setAttribute('donation.type', type);
 
         // amount is minor units (e.g., cents)
         const createPayload: Parameters<typeof this.donations.createPending>[0] = {
-          amount: parsed.data.amount,
-          currency: parsed.data.currency,
-          isAnonymous: parsed.data.isAnonymous,
+          amount,
+          currency,
+          isAnonymous,
         };
 
-        if (parsed.data.donorEmail) createPayload.donorEmail = parsed.data.donorEmail;
-        if (parsed.data.donorName) createPayload.donorName = parsed.data.donorName;
-        if (parsed.data.message) createPayload.message = parsed.data.message;
-        if (parsed.data.campaignId) createPayload.campaignId = parsed.data.campaignId;
-        if (parsed.data.metadata) createPayload.metadata = parsed.data.metadata as any;
+        if (donorEmail) createPayload.donorEmail = donorEmail;
+        if (donorName) createPayload.donorName = donorName;
+        if (message) createPayload.message = message;
+        if (campaignId) createPayload.campaignId = campaignId;
+        if (metadata) createPayload.metadata = metadata as any;
 
         const donation = await this.donations.createPending(createPayload);
 
@@ -51,14 +68,19 @@ export class DonationService {
 
         return {
           donationId: donation.id,
-          amount: parsed.data.amount,
-          currency: parsed.data.currency,
-          donorEmail: parsed.data.donorEmail,
-          donorName: parsed.data.donorName,
-          isAnonymous: parsed.data.isAnonymous,
-          message: parsed.data.message,
-          campaignId: parsed.data.campaignId,
-          metadata: parsed.data.metadata,
+          amount,
+          currency,
+          donorEmail,
+          donorName,
+          isAnonymous,
+          message,
+          campaignId,
+          metadata,
+          frequency,
+          type,
+          successUrl,
+          cancelUrl,
+          source,
         };
       } catch (err) {
         span.recordException(err as Error);

@@ -7,22 +7,23 @@ export const createDonationIntentRequestBodySchema = z.object({
   amount: z.number().int().positive(),
   currency: z.string().length(3).default('usd'),
   donorEmail: z.string().email().max(254).optional(),
+  email: z.string().email().max(254).optional(), // Frontend alias for donorEmail
   donorName: z.string().trim().min(1).max(200).optional(),
   isAnonymous: z.boolean().default(false),
   message: z.string().trim().max(500).optional(), // Donor dedication message
   campaignId: z.string().uuid().optional(), // Associate with a campaign
+  frequency: z.enum(['one-time', 'monthly']).default('one-time'),
+  successUrl: z.string().url().optional(),
+  cancelUrl: z.string().url().optional(),
+  source: z.string().max(100).optional(),
   metadata: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
 });
 
 export const createDonationIntentResponseSchema = z.object({
   ok: z.literal(true),
   data: z.object({
-    donationId: z.string().uuid(),
-    amount: z.number(),
-    currency: z.string(),
-    donorEmail: z.string().email().nullable(),
-    stripeSessionId: z.string(),
-    stripeCheckoutUrl: z.string().url(),
+    sessionId: z.string(),
+    url: z.string().url().nullable(),
   }),
 });
 

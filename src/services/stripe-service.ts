@@ -10,6 +10,7 @@ export class StripeService {
     donationId: string;
     amount: number;
     currency: string;
+    frequency: 'one-time' | 'monthly';
     donorEmail?: string;
     metadata?: Record<string, string | number | boolean>;
     successUrl: string;
@@ -22,18 +23,27 @@ export class StripeService {
         span.setAttribute('donation.id', input.donationId);
         span.setAttribute('donation.amount', input.amount);
         span.setAttribute('donation.currency', input.currency);
+        span.setAttribute('donation.frequency', input.frequency);
+
+        const isRecurring = input.frequency === 'monthly';
+
+        const priceData: Stripe.Checkout.SessionCreateParams.LineItem.PriceData = {
+          currency: input.currency,
+          product_data: {
+            name: isRecurring ? 'Monthly Donation' : 'Donation',
+          },
+          unit_amount: input.amount,
+        };
+
+        if (isRecurring) {
+          priceData.recurring = { interval: 'month' };
+        }
 
         const createParams: Stripe.Checkout.SessionCreateParams = {
-          mode: 'payment',
+          mode: isRecurring ? 'subscription' : 'payment',
           line_items: [
             {
-              price_data: {
-                currency: input.currency,
-                product_data: {
-                  name: 'Donation',
-                },
-                unit_amount: input.amount,
-              },
+              price_data: priceData,
               quantity: 1,
             },
           ],
