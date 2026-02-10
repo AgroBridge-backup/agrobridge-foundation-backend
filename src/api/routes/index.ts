@@ -7,9 +7,13 @@ import { campaignRoutes } from './campaigns.js';
 import { contactRoutes } from './contacts.js';
 import { donationRoutes } from './donations.js';
 import { healthRoutes } from './health.js';
+import { metricsRoutes } from './metrics.js';
 import { stripeWebhookRoutes } from './webhooks-stripe.js';
 
 export function registerRoutes(app: FastifyInstance) {
+  // Observability (no auth, no /api prefix — Prometheus scrapes /metrics directly)
+  app.register(metricsRoutes);
+
   // Public routes
   app.register(healthRoutes, { prefix: '/api' });
   app.register(authRoutes, { prefix: '/api' });

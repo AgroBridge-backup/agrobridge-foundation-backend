@@ -16,6 +16,10 @@ const envSchema = z.object({
   OTEL_EXPORTER_OTLP_ENDPOINT: z.string().url().optional(),
   // Slow DB operation log threshold (ms). Set to a conservative value in prod.
   DB_SLOW_MS: z.coerce.number().int().positive().optional(),
+  // Connection pool maximum size. Default: 20.
+  DB_POOL_MAX: z.coerce.number().int().positive().default(20),
+  // Connection pool idle timeout in milliseconds. Default: 20000.
+  DB_POOL_IDLE_TIMEOUT: z.coerce.number().int().positive().default(20000),
 });
 
 export type Env = z.infer<typeof envSchema>;

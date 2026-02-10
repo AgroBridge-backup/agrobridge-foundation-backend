@@ -1,6 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 
 import { ok } from '../../http/response.js';
+import { registerHealthCheckEndpoint } from '../../rate-limiting/health-check.js';
+import { getTieredRateLimiter } from '../../rate-limiting/tiered-rate-limiter.js';
 
 export async function healthRoutes(app: FastifyInstance) {
   app.get('/health', async (_req, reply) => {
@@ -21,4 +23,8 @@ export async function healthRoutes(app: FastifyInstance) {
       };
     }
   });
+
+  // Rate limit health check endpoints
+  const store = getTieredRateLimiter().getStore();
+  registerHealthCheckEndpoint(app, store);
 }

@@ -27,6 +27,10 @@ export class TieredRateLimiter {
     this.store = store || this.initializeStore();
   }
 
+  getStore(): RateLimitStore {
+    return this.store;
+  }
+
   private initializeStore(): RateLimitStore {
     try {
       const { getRedisClient } = require('../cache/redis-client.js');

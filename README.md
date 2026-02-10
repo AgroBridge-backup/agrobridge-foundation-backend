@@ -34,8 +34,6 @@ npm run dev
 Interactive API documentation is available:
 
 - **Swagger UI**: http://localhost:3000/docs
-- **Redoc**: http://localhost:3000/api-docs
-- **OpenAPI Spec**: http://localhost:3000/json-docs
 
 ## Authentication
 
@@ -89,18 +87,16 @@ Run tests:
 ```bash
 npm run test:unit              # Unit tests
 npm run test:integration         # Integration tests (requires Docker)
-npm run test:performance         # Performance benchmarks
+npm run test:load                # Load tests (requires k6)
 ```
 
 ### Monitoring
 
-Metrics are exposed at `/metrics` endpoint:
+Rate limiting metrics are defined in `src/observability/metrics/rate-limiting-metrics.ts` using prom-client and exposed via `GET /metrics` in Prometheus exposition format. Available metrics:
 
 - `rate_limit_checks_total`: Total number of rate limit checks
 - `rate_limit_check_duration_seconds`: Histogram of check durations
 - `rate_limit_fallbacks_total`: Number of fallback activations
-
-All metrics include labels for tier, allowed status, and storage backend (Redis/in-memory).
 
 ### Response Headers
 
@@ -131,28 +127,24 @@ npm run test:coverage
 
 ### Coverage Targets
 
-- **Lines**: 98%
-- **Functions**: 98%
-- **Branches**: 95%
-- **Statements**: 98%
+Coverage targets are aspirational; actual coverage is still being improved:
+- **Lines**: 98% (target)
+- **Functions**: 98% (target)
+- **Branches**: 95% (target)
+- **Statements**: 98% (target)
 
 ## Monitoring
 
 ### Prometheus
 
-- **Metrics Endpoint**: http://localhost:3000/metrics
-- **Dashboard**: http://localhost:3001 (Grafana)
+- **Metrics**: `GET /metrics` (Prometheus exposition format)
+- **Dashboard**: http://localhost:3001 (Grafana, when using docker-compose.monitoring.yml)
 
 ### Grafana Dashboards
 
 Access at http://localhost:3001 (admin/admin):
 
-- System Overview
-- API Performance
-- Database Health
-- Cache Health
-- Business Metrics
-- Alerts
+- Rate Limiting Production dashboard (`monitoring/grafana/dashboards/rate-limiting-production.json`)
 
 ### Key Metrics
 
@@ -188,21 +180,15 @@ docker-compose -f docker-compose.monitoring.yml up -d
 
 ## Capacity Planning
 
-Based on load testing (2024-01):
+Estimated capacity (not yet validated via load testing):
 
-| Endpoint                   | Capacity (RPS) | p95 Latency | Notes                 |
-| -------------------------- | -------------- | ----------- | --------------------- |
-| GET /api/health            | 1000           | 10ms        | Baseline              |
-| POST /api/contacts         | 100            | 150ms       | Limited by DB writes  |
-| POST /api/donations/intent | 100            | 400ms       | Limited by Stripe API |
-| GET /api/admin/dashboard   | 50             | 80ms        | With Redis cache      |
-| GET /api/admin/donations   | 50             | 180ms       | Pagination queries    |
-
-**Recommended Production Configuration**:
-
-- Minimum: 2 ECS tasks (handles 200 RPS sustained)
-- Recommended: 4 ECS tasks (handles 400 RPS sustained)
-- With autoscaling: 2-10 tasks (handles 200-1000 RPS burst)
+| Endpoint                   | Est. Capacity (RPS) | Notes                 |
+| -------------------------- | -------------------- | --------------------- |
+| GET /api/health            | ~1000                | Baseline              |
+| POST /api/contacts         | ~100                 | Limited by DB writes  |
+| POST /api/donations/intent | ~100                 | Limited by Stripe API |
+| GET /api/admin/dashboard   | ~50                  | With Redis cache      |
+| GET /api/admin/donations   | ~50                  | Pagination queries    |
 
 ## Project Structure
 
@@ -210,8 +196,7 @@ Based on load testing (2024-01):
 src/
 ├── api/                 # API routes and schemas
 │   ├── routes/          # Fastify route definitions
-│   ├── schemas/         # Zod/OpenAPI schemas
-│   └── docs/            # Documentation setup
+│   └── schemas/         # Zod/OpenAPI schemas
 ├── auth/                # Authentication logic
 ├── cache/               # Redis caching layer
 ├── config/              # Configuration and environment
@@ -285,6 +270,8 @@ Optional:
 - `REDIS_URL`: Redis connection string (for caching)
 - `OTEL_EXPORTER_OTLP_ENDPOINT`: OpenTelemetry collector endpoint
 - `DB_SLOW_MS`: Slow query threshold (ms)
+- `DB_POOL_MAX`: Connection pool maximum size (default: 20)
+- `DB_POOL_IDLE_TIMEOUT`: Connection pool idle timeout in ms (default: 20000)
 
 ### Production Checklist
 
