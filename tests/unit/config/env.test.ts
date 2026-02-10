@@ -74,9 +74,6 @@ describe('loadEnv', () => {
     expect(() => loadEnv()).toThrow();
   });
 
-    expect(() => loadEnv()).toThrow();
-  });
-
   it('should throw error on invalid DATABASE_URL', () => {
     process.env = {
       ...getValidEnv(),
@@ -164,6 +161,7 @@ describe('loadEnv', () => {
 
     expect(() => loadEnv()).toThrow();
   });
+});
 
 function getValidEnv(): NodeJS.ProcessEnv {
   return {
