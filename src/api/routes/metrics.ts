@@ -13,7 +13,7 @@ import { fail } from '../../http/response.js';
  */
 export async function metricsRoutes(app: FastifyInstance) {
   app.get('/metrics', async (req, reply) => {
-    const metricsToken = process.env.METRICS_AUTH_TOKEN;
+    const metricsToken = app.env.METRICS_AUTH_TOKEN;
 
     // Option 1: Bearer token authentication (Prometheus scraper)
     const authHeader = req.headers.authorization;

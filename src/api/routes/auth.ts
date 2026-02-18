@@ -7,18 +7,14 @@ import { AdminUserRepository } from '../../repositories/admin-user-repo.js';
 import { AuthService } from '../../services/auth-service.js';
 import { LoginRateLimiter } from '../../rate-limiting/login-rate-limiter.js';
 import { AbuseDetector } from '../../rate-limiting/abuse-detection.js';
+import { getRedisClient } from '../../cache/redis-client.js';
 
 const loginSchema = z.object({
   email: z.string().trim().email().max(254),
   password: z.string().min(1).max(200),
 });
 
-// Singleton login rate limiter (5 attempts per 15 minutes per IP)
-const loginRateLimiter = new LoginRateLimiter({
-  maxAttempts: 5,
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  blockDurationMs: 15 * 60 * 1000, // Block for 15 minutes after exceeding
-});
+let loginRateLimiter: LoginRateLimiter | null = null;
 const abuseDetector = new AbuseDetector();
 
 function isAccountLocked(lockedUntil: Date | null | undefined): lockedUntil is Date {
@@ -34,7 +30,39 @@ function isUnauthorizedError(err: unknown): boolean {
   );
 }
 
+function getLoginRateLimiter(app: FastifyInstance): LoginRateLimiter {
+  if (!loginRateLimiter) {
+    let redis;
+    try {
+      redis = getRedisClient(app.env);
+    } catch {
+      // Redis may not be available (e.g. in tests); fall back to in-memory
+    }
+    loginRateLimiter = new LoginRateLimiter(
+      {
+        maxAttempts: 5,
+        windowMs: 15 * 60 * 1000,
+        blockDurationMs: 15 * 60 * 1000,
+      },
+      redis,
+    );
+  }
+  return loginRateLimiter;
+}
+
 export async function authRoutes(app: FastifyInstance) {
+  // Start periodic cleanup for in-memory abuse store
+  abuseDetector.startCleanup();
+
+  // Tear down on app close
+  app.addHook('onClose', async () => {
+    abuseDetector.stopCleanup();
+    if (loginRateLimiter) {
+      loginRateLimiter.destroy();
+      loginRateLimiter = null;
+    }
+  });
+
   app.post('/auth/login', async (req, reply) => {
     const ip = req.ip || 'unknown';
     const parsed = loginSchema.parse(req.body);
@@ -55,7 +83,8 @@ export async function authRoutes(app: FastifyInstance) {
     // SECURITY FIX: Use atomic checkAndRecord() instead of deprecated checkLimit()
     // This prevents TOCTOU race conditions where concurrent requests could
     // bypass the rate limit between check and record operations.
-    const rateLimitResult = await loginRateLimiter.checkAndRecord(ip, false);
+    const limiter = getLoginRateLimiter(app);
+    const rateLimitResult = await limiter.checkAndRecord(ip, false);
     if (!rateLimitResult.allowed) {
       const retryAfter = Math.ceil(rateLimitResult.retryAfterMs / 1000);
       reply.header('Retry-After', retryAfter.toString());
@@ -74,7 +103,7 @@ export async function authRoutes(app: FastifyInstance) {
       const loggedInAdmin = await service.login(parsed);
 
       // Reset rate limit on successful login
-      await loginRateLimiter.resetForIp(ip);
+      await limiter.resetForIp(ip);
       abuseDetector.recordSuccessfulLogin(ip);
       await service.resetFailedAttempts(loggedInAdmin.adminUserId);
 
@@ -98,7 +127,7 @@ export async function authRoutes(app: FastifyInstance) {
     } catch (err) {
       // SECURITY FIX: Atomically record failed attempt via checkAndRecord(ip, true)
       // instead of separate recordFailedAttempt() which had TOCTOU vulnerability
-      await loginRateLimiter.checkAndRecord(ip, true);
+      await limiter.checkAndRecord(ip, true);
 
       if (isUnauthorizedError(err)) {
         abuseDetector.recordFailedLogin(ip);

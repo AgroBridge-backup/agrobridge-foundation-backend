@@ -24,6 +24,7 @@ export class AbuseDetector {
   private readonly RAPID_REQUEST_THRESHOLD = 10;
   private readonly FAILED_LOGIN_THRESHOLD = 5;
   private readonly WINDOW_MS = 1000;
+  private cleanupTimer: NodeJS.Timeout | null = null;
 
   private getOrCreateMetrics(ip: string, now: number): AbuseMetrics {
     const existing = abuseStore.get(ip);
@@ -132,6 +133,21 @@ export class AbuseDetector {
       if (now - entry.lastRequestTime > expirationTime) {
         abuseStore.delete(key);
       }
+    }
+  }
+
+  startCleanup(intervalMs: number = 5 * 60 * 1000): void {
+    this.stopCleanup();
+    this.cleanupTimer = setInterval(() => this.cleanup(), intervalMs);
+    if (this.cleanupTimer.unref) {
+      this.cleanupTimer.unref();
+    }
+  }
+
+  stopCleanup(): void {
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer);
+      this.cleanupTimer = null;
     }
   }
 }

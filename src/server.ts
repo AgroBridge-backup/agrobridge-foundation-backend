@@ -50,6 +50,13 @@ async function main() {
 
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('unhandledRejection', (err) => {
+    app.log.error({ err }, 'unhandled rejection');
+  });
+  process.on('uncaughtException', (err) => {
+    app.log.fatal({ err }, 'uncaught exception');
+    process.exit(1);
+  });
 }
 
 main().catch((err) => {

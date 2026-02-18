@@ -25,6 +25,9 @@ const envSchema = z.object({
   DB_POOL_MAX: z.coerce.number().int().positive().default(20),
   // Connection pool idle timeout in milliseconds. Default: 20000.
   DB_POOL_IDLE_TIMEOUT: z.coerce.number().int().positive().default(20000),
+  // Bearer token for Prometheus /metrics endpoint authentication.
+  // Required in production; omit in dev for unauthenticated access.
+  METRICS_AUTH_TOKEN: z.string().min(16).optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;
