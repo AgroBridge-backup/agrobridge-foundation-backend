@@ -25,20 +25,26 @@ export class AbuseDetector {
   private readonly FAILED_LOGIN_THRESHOLD = 5;
   private readonly WINDOW_MS = 1000;
 
+  private getOrCreateMetrics(ip: string, now: number): AbuseMetrics {
+    const existing = abuseStore.get(ip);
+    if (existing) return existing;
+
+    const created: AbuseMetrics = {
+      failedAttempts: 0,
+      rapidRequests: 0,
+      suspiciousPatterns: 0,
+      lastRequestTime: now,
+      requestCountInWindow: 0,
+    };
+    abuseStore.set(ip, created);
+    return created;
+  }
+
   async detectAbuse(req: FastifyRequest): Promise<AbuseScore> {
     const ip = req.ip || 'unknown';
     const now = Date.now();
 
-    let metrics = abuseStore.get(ip);
-    if (!metrics) {
-      metrics = {
-        failedAttempts: 0,
-        rapidRequests: 0,
-        suspiciousPatterns: 0,
-        lastRequestTime: now,
-        requestCountInWindow: 0,
-      };
-    }
+    const metrics = this.getOrCreateMetrics(ip, now);
 
     const reasons: string[] = [];
     let score = 0;
@@ -57,12 +63,9 @@ export class AbuseDetector {
       metrics.rapidRequests = metrics.requestCountInWindow;
     }
 
-    if (req.routeOptions.url === '/api/auth/login' && req.method === 'POST') {
-      metrics.failedAttempts++;
-      if (metrics.failedAttempts >= this.FAILED_LOGIN_THRESHOLD) {
-        score += 40;
-        reasons.push(`Multiple failed login attempts (${metrics.failedAttempts})`);
-      }
+    if (metrics.failedAttempts >= this.FAILED_LOGIN_THRESHOLD) {
+      score += 40;
+      reasons.push(`Multiple failed login attempts (${metrics.failedAttempts})`);
     }
 
     if (this.detectSuspiciousPattern(ip, req)) {
@@ -83,6 +86,22 @@ export class AbuseDetector {
       tier,
       reasons,
     };
+  }
+
+  recordFailedLogin(ip: string): void {
+    const now = Date.now();
+    const metrics = this.getOrCreateMetrics(ip, now);
+    metrics.failedAttempts += 1;
+    metrics.lastRequestTime = now;
+    abuseStore.set(ip, metrics);
+  }
+
+  recordSuccessfulLogin(ip: string): void {
+    const now = Date.now();
+    const metrics = this.getOrCreateMetrics(ip, now);
+    metrics.failedAttempts = 0;
+    metrics.lastRequestTime = now;
+    abuseStore.set(ip, metrics);
   }
 
   private getRecentRequestCount(ip: string, windowMs: number): number {

@@ -8,6 +8,14 @@ const token = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN ?? '';
 const now = new Date();
 const since = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
 const dateStamp = now.toISOString().slice(0, 10);
+const artifactSensitivity = process.env.ARTIFACT_SENSITIVITY ?? 'internal';
+
+const requiredGateNames = (
+  process.env.RELIABILITY_REQUIRED_GATES ?? 'lint,build,unit,integration,e2e'
+)
+  .split(',')
+  .map((entry) => entry.trim().toLowerCase())
+  .filter(Boolean);
 
 const docsOutputPath = resolve('docs/reports', `reliability-scorecard-${dateStamp}.md`);
 const jsonOutputPath = resolve('artifacts/reliability', `scorecard-${dateStamp}.json`);
@@ -19,8 +27,36 @@ if (!repository) {
 
 const [owner, repo] = repository.split('/');
 
-function percentage(value) {
-  return `${(value * 100).toFixed(2)}%`;
+function formatPercent(value) {
+  return value === null ? 'N/A' : `${(value * 100).toFixed(2)}%`;
+}
+
+function formatNumber(value) {
+  return value === null ? 'N/A' : value.toFixed(2);
+}
+
+function normalizeJobName(name) {
+  return (name ?? '').trim().toLowerCase();
+}
+
+function gateMatch(gate, jobName) {
+  return (
+    jobName === gate ||
+    jobName.startsWith(`${gate} `) ||
+    jobName.startsWith(`${gate}/`) ||
+    jobName.startsWith(`${gate}-`) ||
+    jobName.startsWith(`${gate}(`)
+  );
+}
+
+function parseOptionalFiniteEnvNumber(name) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return null;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`Invalid numeric value for ${name}: ${raw}`);
+  }
+  return parsed;
 }
 
 async function githubApi(pathname, searchParams = {}) {
@@ -41,8 +77,7 @@ async function githubApi(pathname, searchParams = {}) {
   return response.json();
 }
 
-async function listBackendGateRuns() {
-  const warnings = [];
+async function listBackendGateRuns(warnings) {
   const workflows = await githubApi(`/repos/${owner}/${repo}/actions/workflows`, {
     per_page: 100,
   });
@@ -72,8 +107,7 @@ async function listBackendGateRuns() {
     if (fallbackRuns.length === 0) {
       warnings.push('No Backend Gates runs found in the last 7 days.');
     }
-
-    return { runs: fallbackRuns, warnings };
+    return fallbackRuns;
   }
 
   const runsPayload = await githubApi(
@@ -84,64 +118,99 @@ async function listBackendGateRuns() {
     },
   );
 
-  return {
-    runs: (runsPayload.workflow_runs ?? []).filter(
-      (run) => new Date(run.created_at).getTime() >= since.getTime(),
-    ),
-    warnings,
-  };
-}
-
-async function countContractDriftEvents(runs) {
-  const failedRuns = runs.filter((run) => run.conclusion && run.conclusion !== 'success');
-  if (failedRuns.length === 0) return 0;
-
-  const results = await Promise.all(
-    failedRuns.map(async (run) => {
-      const jobsPayload = await githubApi(`/repos/${owner}/${repo}/actions/runs/${run.id}/jobs`, {
-        per_page: 100,
-      });
-      const jobs = jobsPayload.jobs ?? [];
-      return jobs.some((job) => {
-        const name = (job.name ?? '').toLowerCase();
-        const failed = job.conclusion && job.conclusion !== 'success';
-        return failed && (name === 'contracts' || name === 'frontend-compat');
-      });
-    }),
+  const runs = (runsPayload.workflow_runs ?? []).filter(
+    (run) => new Date(run.created_at).getTime() >= since.getTime(),
   );
 
-  return results.filter(Boolean).length;
+  if (runs.length === 0) {
+    warnings.push('No Backend Gates runs found in the last 7 days.');
+  }
+  return runs;
 }
 
-function computeIncidentsAndMttr(runs) {
-  const ordered = [...runs].sort(
-    (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+async function listJobsForRun(runId, cache) {
+  if (cache.has(runId)) {
+    return cache.get(runId);
+  }
+
+  const jobsPayload = await githubApi(`/repos/${owner}/${repo}/actions/runs/${runId}/jobs`, {
+    per_page: 100,
+  });
+
+  const jobs = jobsPayload.jobs ?? [];
+  cache.set(runId, jobs);
+  return jobs;
+}
+
+async function buildRunAnalyses(runs) {
+  const jobsCache = new Map();
+
+  return Promise.all(
+    runs.map(async (run) => {
+      const jobs = await listJobsForRun(run.id, jobsCache);
+
+      const requiredGates = requiredGateNames.map((gate) => {
+        const job = jobs.find((entry) => gateMatch(gate, normalizeJobName(entry.name)));
+        const status = (job?.conclusion ?? 'missing').toLowerCase();
+        return {
+          gate,
+          status,
+          pass: status === 'success',
+        };
+      });
+
+      const requiredPass = requiredGates.every((entry) => entry.pass);
+      const contractDriftFailure = jobs.some((job) => {
+        const jobName = normalizeJobName(job.name);
+        const failed = (job.conclusion ?? '').toLowerCase() !== 'success';
+        return failed && (jobName === 'contracts' || jobName === 'frontend-compat');
+      });
+
+      return {
+        id: run.id,
+        runNumber: run.run_number,
+        runAttempt: Number(run.run_attempt ?? 1),
+        conclusion: run.conclusion ?? 'unknown',
+        createdAt: run.created_at,
+        updatedAt: run.updated_at ?? run.created_at,
+        requiredPass,
+        requiredGates,
+        contractDriftFailure,
+      };
+    }),
+  );
+}
+
+function computeCiRecoveryMttr(analyses) {
+  const ordered = [...analyses].sort(
+    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
   );
 
   let openIncidentStart = null;
-  let incidentCount = 0;
-  const mttrSamplesMs = [];
+  let ciIncidentCount = 0;
+  const samplesMs = [];
 
   for (const run of ordered) {
-    const isSuccess = run.conclusion === 'success';
-    if (!isSuccess && !openIncidentStart) {
-      incidentCount += 1;
-      openIncidentStart = new Date(run.created_at).getTime();
+    if (!run.requiredPass && openIncidentStart === null) {
+      ciIncidentCount += 1;
+      openIncidentStart = new Date(run.createdAt).getTime();
     }
 
-    if (isSuccess && openIncidentStart) {
-      const recoveredAt = new Date(run.updated_at ?? run.created_at).getTime();
-      mttrSamplesMs.push(Math.max(0, recoveredAt - openIncidentStart));
+    if (run.requiredPass && openIncidentStart !== null) {
+      const recoveredAt = new Date(run.updatedAt).getTime();
+      samplesMs.push(Math.max(0, recoveredAt - openIncidentStart));
       openIncidentStart = null;
     }
   }
 
-  const mttrMinutes =
-    mttrSamplesMs.length === 0
-      ? 0
-      : mttrSamplesMs.reduce((sum, value) => sum + value, 0) / mttrSamplesMs.length / 60000;
-
-  return { incidentCount, mttrMinutes, mttrSamplesMs };
+  return {
+    ciIncidentCount,
+    ciRecoverySamplesMs: samplesMs,
+    ciRecoveryMttrMinutes:
+      samplesMs.length === 0
+        ? null
+        : samplesMs.reduce((sum, value) => sum + value, 0) / samplesMs.length / 60000,
+  };
 }
 
 async function writeOutputs(report) {
@@ -157,34 +226,54 @@ async function writeOutputs(report) {
     '',
     '| Metric | Value |',
     '| --- | --- |',
-    `| Flake rate | ${percentage(report.metrics.flakeRate)} |`,
-    `| Required gate pass rate | ${percentage(report.metrics.requiredGatePassRate)} |`,
-    `| MTTR (minutes) | ${report.metrics.mttrMinutes.toFixed(2)} |`,
-    `| Incident count | ${report.metrics.incidentCount} |`,
+    `| Flake rate | ${formatPercent(report.metrics.flakeRate)} |`,
+    `| Required gate pass rate (job-level) | ${formatPercent(report.metrics.requiredGatePassRate)} |`,
+    `| CI recovery MTTR (minutes) | ${formatNumber(report.metrics.ciRecoveryMttrMinutes)} |`,
+    `| Service incident MTTR (minutes) | ${formatNumber(report.metrics.serviceIncidentMttrMinutes)} |`,
+    `| CI incident count | ${report.metrics.ciIncidentCount} |`,
     `| Contract drift events | ${report.metrics.contractDriftEvents} |`,
     '',
     '## Notes',
     '',
+    `- Required gate set: ${requiredGateNames.join(', ')}`,
     '- Flake rate uses workflow rerun attempts (`run_attempt > 1`).',
-    '- Required gate pass rate is based on Backend Gates workflow conclusions over the period.',
-    '- Contract drift events count failed `contracts` or `frontend-compat` jobs in failed runs.',
-  ].join('\n');
+    '- Required gate pass rate is computed from required job-level conclusions per Backend Gates run.',
+    '- Contract drift events count failed `contracts` or `frontend-compat` jobs.',
+    '- `N/A` indicates no-data windows or unavailable incident telemetry.',
+  ];
 
-  await writeFile(docsOutputPath, `${md}\n`, 'utf8');
+  if (report.warnings.length > 0) {
+    md.push('', '## Warnings', '');
+    for (const warning of report.warnings) {
+      md.push(`- ${warning}`);
+    }
+  }
+
+  await writeFile(docsOutputPath, `${md.join('\n')}\n`, 'utf8');
   await writeFile(jsonOutputPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
 }
 
 async function main() {
-  const { runs, warnings } = await listBackendGateRuns();
-  const totalRuns = runs.length;
-  const successfulRuns = runs.filter((run) => run.conclusion === 'success').length;
-  const flakeRuns = runs.filter((run) => Number(run.run_attempt ?? 1) > 1).length;
+  const warnings = [];
+  const runs = await listBackendGateRuns(warnings);
+  const analyses = await buildRunAnalyses(runs);
 
-  const requiredGatePassRate = totalRuns === 0 ? 0 : successfulRuns / totalRuns;
-  const flakeRate = totalRuns === 0 ? 0 : flakeRuns / totalRuns;
+  const totalRuns = analyses.length;
+  const successfulRuns = analyses.filter((run) => run.conclusion === 'success').length;
+  const flakeRuns = analyses.filter((run) => run.runAttempt > 1).length;
+  const requiredPassRuns = analyses.filter((run) => run.requiredPass).length;
+  const contractDriftEvents = analyses.filter((run) => run.contractDriftFailure).length;
 
-  const { incidentCount, mttrMinutes, mttrSamplesMs } = computeIncidentsAndMttr(runs);
-  const contractDriftEvents = await countContractDriftEvents(runs);
+  const flakeRate = totalRuns === 0 ? null : flakeRuns / totalRuns;
+  const requiredGatePassRate = totalRuns === 0 ? null : requiredPassRuns / totalRuns;
+
+  const ciRecovery = computeCiRecoveryMttr(analyses);
+  const serviceIncidentMttrMinutes = parseOptionalFiniteEnvNumber('SERVICE_INCIDENT_MTTR_MINUTES');
+  if (serviceIncidentMttrMinutes === null) {
+    warnings.push(
+      'Service incident MTTR data not configured (set SERVICE_INCIDENT_MTTR_MINUTES or integrate an incident source).',
+    );
+  }
 
   const report = {
     generatedAt: now.toISOString(),
@@ -193,23 +282,42 @@ async function main() {
       end: now.toISOString(),
       days: 7,
     },
+    sensitivity: artifactSensitivity,
     repository,
+    requiredGateNames,
     totals: {
       runs: totalRuns,
       successfulRuns,
       failedRuns: totalRuns - successfulRuns,
       flakeRuns,
+      requiredPassRuns,
     },
     metrics: {
       flakeRate,
       requiredGatePassRate,
-      mttrMinutes,
-      incidentCount,
+      ciRecoveryMttrMinutes: ciRecovery.ciRecoveryMttrMinutes,
+      serviceIncidentMttrMinutes,
+      ciIncidentCount: ciRecovery.ciIncidentCount,
       contractDriftEvents,
     },
-    mttrSamplesMs,
+    ciRecoverySamplesMs: ciRecovery.ciRecoverySamplesMs,
+    runAnalyses: analyses.map((run) => ({
+      id: run.id,
+      runNumber: run.runNumber,
+      runAttempt: run.runAttempt,
+      conclusion: run.conclusion,
+      requiredPass: run.requiredPass,
+      requiredGates: run.requiredGates,
+      contractDriftFailure: run.contractDriftFailure,
+      createdAt: run.createdAt,
+      updatedAt: run.updatedAt,
+    })),
     warnings,
   };
+
+  if (totalRuns === 0) {
+    warnings.push('No-data window: no Backend Gates runs were completed in the lookback period.');
+  }
 
   await writeOutputs(report);
 
@@ -221,6 +329,7 @@ main().catch(async (error) => {
   const failureReport = {
     generatedAt: now.toISOString(),
     repository,
+    sensitivity: artifactSensitivity,
     error: error instanceof Error ? error.message : String(error),
   };
 

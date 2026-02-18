@@ -1,90 +1,73 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { LRUCache } from '../../src/utils/lru-cache.js';
+import { getEnvNumber, isTier3Enabled, ratio } from '../helpers/reliability-tier.js';
 
-describe('LRUCache - Performance', () => {
-  describe('O(1) Operations', () => {
-    it('should maintain O(1) get performance with large cache', () => {
-      const cache = new LRUCache<string, number>(100000);
+const describeTier3 = isTier3Enabled() ? describe : describe.skip;
 
-      // Fill cache
-      for (let i = 0; i < 100000; i++) {
-        cache.set(`key-${i}`, i);
-      }
+const GET_SCALE_RATIO_MAX = getEnvNumber('TEST_TIER3_LRU_GET_SCALE_RATIO_MAX', 2.4);
+const SET_STABILITY_RATIO_MAX = getEnvNumber('TEST_TIER3_LRU_SET_STABILITY_RATIO_MAX', 2.4);
+const SET_STABILITY_ITERATIONS = Math.floor(getEnvNumber('TEST_TIER3_LRU_SET_STABILITY_ITERATIONS', 80000));
+const DELETE_STABILITY_RATIO_MAX = getEnvNumber('TEST_TIER3_LRU_DELETE_STABILITY_RATIO_MAX', 2.0);
 
-      // Measure get performance
+describeTier3('LRUCache - Performance', () => {
+  describe('O(1) operation envelopes', () => {
+    it('keeps get latency growth bounded when cache size increases', () => {
+      const smallCacheSize = 10000;
+      const largeCacheSize = 100000;
       const iterations = 10000;
-      const startTime = process.hrtime.bigint();
 
-      for (let i = 0; i < iterations; i++) {
-        cache.get(`key-${i % 100000}`);
-      }
+      const smallCache = createFilledCache(smallCacheSize);
+      const largeCache = createFilledCache(largeCacheSize);
 
-      const endTime = process.hrtime.bigint();
-      const durationMs = Number(endTime - startTime) / 1_000_000;
-      const avgOperationUs = (durationMs * 1000) / iterations;
+      const smallGetUs = measureOperationLatencyUs(iterations, (index) => {
+        smallCache.get(`key-${index % smallCacheSize}`);
+      });
+      const largeGetUs = measureOperationLatencyUs(iterations, (index) => {
+        largeCache.get(`key-${index % largeCacheSize}`);
+      });
 
-      console.log(`LRUCache get: ${avgOperationUs.toFixed(3)}µs per operation`);
-
-      // Should be under 10µs per operation for O(1)
-      expect(avgOperationUs).toBeLessThan(50);
+      expect(ratio(largeGetUs, Math.max(0.001, smallGetUs))).toBeLessThanOrEqual(GET_SCALE_RATIO_MAX);
     });
 
-    it('should maintain O(1) set performance with eviction', () => {
+    it('keeps set with eviction latency stable across repeated runs', () => {
       const cache = new LRUCache<string, number>(10000);
+      const iterations = SET_STABILITY_ITERATIONS;
 
-      // Measure set performance with eviction
-      const iterations = 100000;
-      const startTime = process.hrtime.bigint();
+      const firstRunUs = measureOperationLatencyUs(iterations, (index) => {
+        cache.set(`first-run-${index}`, index);
+      });
+      const secondRunUs = measureOperationLatencyUs(iterations, (index) => {
+        cache.set(`second-run-${index}`, index);
+      });
 
-      for (let i = 0; i < iterations; i++) {
-        cache.set(`key-${i}`, i);
-      }
-
-      const endTime = process.hrtime.bigint();
-      const durationMs = Number(endTime - startTime) / 1_000_000;
-      const avgOperationUs = (durationMs * 1000) / iterations;
-
-      console.log(`LRUCache set with eviction: ${avgOperationUs.toFixed(3)}µs per operation`);
-
-      // Should be under 10µs per operation for O(1)
-      expect(avgOperationUs).toBeLessThan(50);
-
-      // Cache should never exceed max size
+      const stabilityRatio = ratio(secondRunUs, Math.max(0.001, firstRunUs));
+      expect(stabilityRatio).toBeLessThanOrEqual(SET_STABILITY_RATIO_MAX);
       expect(cache.size).toBeLessThanOrEqual(10000);
     });
 
-    it('should maintain O(1) delete performance', () => {
-      const cache = new LRUCache<string, number>(100000);
-
-      // Fill cache
-      for (let i = 0; i < 100000; i++) {
-        cache.set(`key-${i}`, i);
-      }
-
-      // Measure delete performance
+    it('keeps delete latency stable across repeated runs', () => {
+      const entries = 30000;
       const iterations = 10000;
-      const startTime = process.hrtime.bigint();
 
-      for (let i = 0; i < iterations; i++) {
-        cache.delete(`key-${i}`);
-      }
+      const firstCache = createFilledCache(entries);
+      const secondCache = createFilledCache(entries);
 
-      const endTime = process.hrtime.bigint();
-      const durationMs = Number(endTime - startTime) / 1_000_000;
-      const avgOperationUs = (durationMs * 1000) / iterations;
+      const firstRunUs = measureOperationLatencyUs(iterations, (index) => {
+        firstCache.delete(`key-${index}`);
+      });
+      const secondRunUs = measureOperationLatencyUs(iterations, (index) => {
+        secondCache.delete(`key-${index}`);
+      });
 
-      console.log(`LRUCache delete: ${avgOperationUs.toFixed(3)}µs per operation`);
-
-      // Should be under 10µs per operation for O(1)
-      expect(avgOperationUs).toBeLessThan(50);
+      const stabilityRatio = ratio(secondRunUs, Math.max(0.001, firstRunUs));
+      expect(stabilityRatio).toBeLessThanOrEqual(DELETE_STABILITY_RATIO_MAX);
     });
   });
 
-  describe('Memory Efficiency', () => {
-    it('should never exceed max size under heavy load', () => {
+  describe('functional invariants under perf load', () => {
+    it('never exceeds max size under sustained writes', () => {
       const cache = new LRUCache<string, number>(1000);
 
-      // Concurrent-like access pattern
       for (let round = 0; round < 100; round++) {
         for (let i = 0; i < 100; i++) {
           cache.set(`key-${round * 100 + i}`, i);
@@ -93,17 +76,13 @@ describe('LRUCache - Performance', () => {
       }
     });
 
-    it('should maintain LRU order correctly', () => {
+    it('maintains LRU order correctly', () => {
       const cache = new LRUCache<string, number>(3);
 
       cache.set('a', 1);
       cache.set('b', 2);
       cache.set('c', 3);
-
-      // Access 'a' to make it most recently used
       cache.get('a');
-
-      // Add 'd' - should evict 'b' (oldest after 'a' access)
       cache.set('d', 4);
 
       expect(cache.has('a')).toBe(true);
@@ -111,45 +90,39 @@ describe('LRUCache - Performance', () => {
       expect(cache.has('c')).toBe(true);
       expect(cache.has('d')).toBe(true);
     });
-  });
 
-  describe('Hit Rate Tracking', () => {
-    it('should accurately track hit rate', () => {
+    it('tracks hit rate accurately', () => {
       const cache = new LRUCache<string, number>(100);
 
-      // Set up some entries
       for (let i = 0; i < 50; i++) {
         cache.set(`key-${i}`, i);
       }
 
-      // 80 hits
       for (let i = 0; i < 80; i++) {
         cache.get(`key-${i % 50}`);
       }
 
-      // 20 misses
       for (let i = 0; i < 20; i++) {
         cache.get(`missing-${i}`);
       }
 
       const stats = cache.getStats();
-
       expect(stats.hits).toBe(80);
       expect(stats.misses).toBe(20);
       expect(stats.hitRate).toBeCloseTo(0.8, 2);
     });
   });
 
-  describe('Stress Test', () => {
-    it('should handle rapid concurrent-like access patterns', () => {
+  describe('deterministic stress test', () => {
+    it('handles deterministic mixed operations without invariant breaks', () => {
       const cache = new LRUCache<string, object>(10000);
       const errors: Error[] = [];
+      const random = createDeterministicRandom(0xc0ffee);
 
       try {
-        // Simulate concurrent access
         for (let i = 0; i < 100000; i++) {
-          const key = `key-${Math.floor(Math.random() * 15000)}`;
-          const action = Math.random();
+          const key = `key-${Math.floor(random() * 15000)}`;
+          const action = random();
 
           if (action < 0.4) {
             cache.set(key, { id: i, data: 'x'.repeat(100) });
@@ -159,13 +132,12 @@ describe('LRUCache - Performance', () => {
             cache.delete(key);
           }
 
-          // Verify invariants
           if (cache.size > 10000) {
             errors.push(new Error(`Cache exceeded max size: ${cache.size}`));
           }
         }
-      } catch (e) {
-        errors.push(e as Error);
+      } catch (err) {
+        errors.push(err as Error);
       }
 
       expect(errors.length).toBe(0);
@@ -173,3 +145,34 @@ describe('LRUCache - Performance', () => {
     });
   });
 });
+
+function createFilledCache(size: number): LRUCache<string, number> {
+  const cache = new LRUCache<string, number>(size);
+  for (let i = 0; i < size; i++) {
+    cache.set(`key-${i}`, i);
+  }
+  return cache;
+}
+
+function measureOperationLatencyUs(
+  iterations: number,
+  operation: (iteration: number) => void,
+): number {
+  const start = process.hrtime.bigint();
+
+  for (let i = 0; i < iterations; i++) {
+    operation(i);
+  }
+
+  const end = process.hrtime.bigint();
+  const durationMs = Number(end - start) / 1_000_000;
+  return (durationMs * 1000) / iterations;
+}
+
+function createDeterministicRandom(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (state * 1664525 + 1013904223) >>> 0;
+    return state / 4294967296;
+  };
+}

@@ -16,6 +16,9 @@ concurrency:
   group: backend-gates-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  ARTIFACT_SENSITIVITY: internal
+
 jobs:
   lint:
     name: lint
@@ -23,29 +26,25 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Setup Node and install dependencies
+        uses: ./.github/actions/setup-node-install
         with:
-          node-version: 20
-          cache: npm
+          node-version: '20'
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Run lint (strict no-warnings)
-        run: |
-          mkdir -p artifacts/lint
-          set -o pipefail
-          npm run lint 2>&1 | tee artifacts/lint/lint.log
+      - name: Run lint gate
+        run: node ./scripts/ci/run-gate.mjs lint "npm run lint" "artifacts/lint/lint.log"
 
       - name: Upload lint artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: lint-failure-artifacts
-          path: artifacts/lint
+          path: |
+            artifacts/lint
+            artifacts/gates/lint.json
+          retention-days: 14
           if-no-files-found: ignore
 
   build:
@@ -54,32 +53,25 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Setup Node and install dependencies
+        uses: ./.github/actions/setup-node-install
         with:
-          node-version: 20
-          cache: npm
+          node-version: '20'
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Generate Prisma client
-        run: npm run prisma:generate
-
-      - name: Run build
-        run: |
-          mkdir -p artifacts/build
-          set -o pipefail
-          npm run build 2>&1 | tee artifacts/build/build.log
+      - name: Run build gate
+        run: node ./scripts/ci/run-gate.mjs build "npm run build" "artifacts/build/build.log"
 
       - name: Upload build artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: build-failure-artifacts
-          path: artifacts/build
+          path: |
+            artifacts/build
+            artifacts/gates/build.json
+          retention-days: 14
           if-no-files-found: ignore
 
   unit:
@@ -88,32 +80,25 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Setup Node and install dependencies
+        uses: ./.github/actions/setup-node-install
         with:
-          node-version: 20
-          cache: npm
+          node-version: '20'
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Generate Prisma client
-        run: npm run prisma:generate
-
-      - name: Run unit tests
-        run: |
-          mkdir -p artifacts/unit
-          set -o pipefail
-          npm run test:unit 2>&1 | tee artifacts/unit/unit.log
+      - name: Run unit gate
+        run: node ./scripts/ci/run-gate.mjs unit "npm run test:unit" "artifacts/unit/unit.log"
 
       - name: Upload unit artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: unit-failure-artifacts
-          path: artifacts/unit
+          path: |
+            artifacts/unit
+            artifacts/gates/unit.json
+          retention-days: 14
           if-no-files-found: ignore
 
   contracts:
@@ -122,32 +107,28 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Setup Node and install dependencies
+        uses: ./.github/actions/setup-node-install
         with:
-          node-version: 20
-          cache: npm
+          node-version: '20'
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Contract preflight
+        run: node ./scripts/contracts/preflight.mjs
 
-      - name: Generate Prisma client
-        run: npm run prisma:generate
+      - name: Run contracts gate
+        run: node ./scripts/ci/run-gate.mjs contracts "npm run contracts:check" "artifacts/contracts/contracts.log"
 
-      - name: Run contract checks
-        run: |
-          mkdir -p artifacts/contracts
-          set -o pipefail
-          npm run contracts:check 2>&1 | tee artifacts/contracts/contracts.log
-
-      - name: Upload contract artifacts
+      - name: Upload contracts artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: contracts-failure-artifacts
-          path: artifacts/contracts
+          path: |
+            artifacts/contracts
+            artifacts/gates/contracts.json
+          retention-days: 14
           if-no-files-found: ignore
 
   integration:
@@ -181,32 +162,25 @@ jobs:
           --health-retries 5
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Setup Node and install dependencies
+        uses: ./.github/actions/setup-node-install
         with:
-          node-version: 20
-          cache: npm
+          node-version: '20'
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Generate Prisma client
-        run: npm run prisma:generate
-
-      - name: Run integration tests
-        run: |
-          mkdir -p artifacts/integration
-          set -o pipefail
-          npm run test:integration 2>&1 | tee artifacts/integration/integration.log
+      - name: Run integration gate
+        run: node ./scripts/ci/run-gate.mjs integration "npm run test:integration" "artifacts/integration/integration.log"
 
       - name: Upload integration artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: integration-failure-artifacts
-          path: artifacts/integration
+          path: |
+            artifacts/integration
+            artifacts/gates/integration.json
+          retention-days: 14
           if-no-files-found: ignore
 
   e2e:
@@ -248,36 +222,28 @@ jobs:
       REDIS_URL: redis://127.0.0.1:6379
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Setup Node and install dependencies
+        uses: ./.github/actions/setup-node-install
         with:
-          node-version: 20
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Generate Prisma client
-        run: npm run prisma:generate
+          node-version: '20'
 
       - name: Prepare database schema
         run: npx prisma db push
 
-      - name: Run e2e tests
-        run: |
-          mkdir -p artifacts/e2e
-          set -o pipefail
-          npm run test:e2e 2>&1 | tee artifacts/e2e/e2e.log
+      - name: Run e2e gate
+        run: node ./scripts/ci/run-gate.mjs e2e "npm run test:e2e" "artifacts/e2e/e2e.log"
 
       - name: Upload e2e artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: e2e-failure-artifacts
           path: |
             artifacts/e2e
+            artifacts/gates/e2e.json
+          retention-days: 14
           if-no-files-found: ignore
 
   frontend-compat:
@@ -287,45 +253,51 @@ jobs:
     needs: [contracts]
     steps:
       - name: Checkout backend
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Setup Node and install dependencies
+        uses: ./.github/actions/setup-node-install
         with:
-          node-version: 20
-          cache: npm
+          node-version: '20'
 
-      - name: Install backend dependencies
-        run: npm ci
+      - name: Contracts preflight
+        run: node ./scripts/contracts/preflight.mjs
 
       - name: Export backend OpenAPI snapshot
         run: npm run contracts:openapi:export
 
       - name: Checkout frontend repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: AgroBridge-backup/agrobridge-foundation-web
           ref: main
           path: frontend
           token: ${{ secrets.FRONTEND_REPO_TOKEN || github.token }}
 
-      - name: Run frontend compatibility check against backend branch contracts
+      - name: Frontend checker preflight
         run: |
-          mkdir -p artifacts/frontend-compat
-          set -o pipefail
-          node frontend/scripts/contracts/check-backend-contract.mjs 2>&1 | tee artifacts/frontend-compat/frontend-compat.log
+          test -f frontend/scripts/contracts/check-backend-contract.mjs
+          test -f contracts/openapi/openapi.v1.snapshot.json
+          test -f contracts/schemas/post-api-donations-intent.response.v1.json
+          test -f contracts/schemas/post-api-contacts.response.v1.json
+
+      - name: Run frontend compatibility gate
+        run: node ./scripts/ci/run-gate.mjs frontend-compat "node frontend/scripts/contracts/check-backend-contract.mjs" "artifacts/frontend-compat/frontend-compat.log"
         env:
           BACKEND_OPENAPI_FILE: contracts/openapi/openapi.v1.snapshot.json
-          BACKEND_DONATION_SCHEMA_FILE: contracts/schemas/post-api-donations-intent.response.v1.ts
-          BACKEND_CONTACT_SCHEMA_FILE: contracts/schemas/post-api-contacts.response.v1.ts
+          BACKEND_DONATION_SCHEMA_FILE: contracts/schemas/post-api-donations-intent.response.v1.json
+          BACKEND_CONTACT_SCHEMA_FILE: contracts/schemas/post-api-contacts.response.v1.json
           CONTRACT_ARTIFACT_DIR: artifacts/frontend-compat
 
       - name: Upload frontend compatibility artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: frontend-compat-artifacts
-          path: artifacts/frontend-compat
+          path: |
+            artifacts/frontend-compat
+            artifacts/gates/frontend-compat.json
+          retention-days: 14
           if-no-files-found: ignore
 
   release-report:
@@ -335,14 +307,25 @@ jobs:
     if: always()
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Setup Node and install dependencies
+        uses: ./.github/actions/setup-node-install
         with:
-          node-version: 20
+          node-version: '20'
 
-      - name: Generate release report
+      - name: Release report preflight
+        run: |
+          test -f scripts/generate-release-report.mjs
+          test -f scripts/governance/export-branch-protection.mjs
+          test -f package.json
+
+      - name: Export branch protection evidence
+        env:
+          GOVERNANCE_AUDIT_TOKEN: ${{ secrets.GOVERNANCE_AUDIT_TOKEN }}
+        run: node ./scripts/ci/run-gate.mjs branch-protection "node ./scripts/governance/export-branch-protection.mjs" "artifacts/governance/branch-protection.log"
+
+      - name: Generate release report gate
         env:
           GATE_LINT: ${{ needs.lint.result }}
           GATE_BUILD: ${{ needs.build.result }}
@@ -356,17 +339,28 @@ jobs:
           GITHUB_REF_NAME: ${{ github.ref_name }}
           GITHUB_SHA: ${{ github.sha }}
           GITHUB_RUN_ID: ${{ github.run_id }}
+        run: node ./scripts/ci/run-gate.mjs release-report "npm run report:release" "artifacts/release/release-report.log"
+
+      - name: Publish summary
+        if: always()
         run: |
-          mkdir -p artifacts/release
-          npm run report:release
-          cat artifacts/release/release-readiness.md >> "$GITHUB_STEP_SUMMARY"
+          if [ -f artifacts/release/release-readiness.md ]; then
+            cat artifacts/release/release-readiness.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Release readiness report missing." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Upload release report artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: release-readiness-artifacts
-          path: artifacts/release
+          path: |
+            artifacts/release
+            artifacts/governance
+            artifacts/gates/release-report.json
+            artifacts/gates/branch-protection.json
+          retention-days: 30
           if-no-files-found: ignore
 
   nightly-tier3:
@@ -409,30 +403,23 @@ jobs:
       REDIS_URL: redis://127.0.0.1:6379
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Setup Node and install dependencies
+        uses: ./.github/actions/setup-node-install
         with:
-          node-version: 20
-          cache: npm
+          node-version: '20'
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Generate Prisma client
-        run: npm run prisma:generate
-
-      - name: Run tier3 nightly suites
-        run: |
-          mkdir -p artifacts/tier3
-          set -o pipefail
-          npm run test:tier3:nightly 2>&1 | tee artifacts/tier3/tier3-nightly.log
+      - name: Run tier3 nightly gate
+        run: node ./scripts/ci/run-gate.mjs nightly-tier3 "npm run test:tier3:nightly" "artifacts/tier3/tier3-nightly.log"
 
       - name: Upload tier3 artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: tier3-nightly-artifacts
-          path: artifacts/tier3
+          path: |
+            artifacts/tier3
+            artifacts/gates/nightly-tier3.json
+          retention-days: 14
           if-no-files-found: ignore

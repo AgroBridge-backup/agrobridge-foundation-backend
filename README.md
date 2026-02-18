@@ -85,9 +85,11 @@ When Redis is not available, the system automatically falls back to in-memory ra
 Run tests:
 
 ```bash
-npm run test:unit              # Unit tests
-npm run test:integration         # Integration tests (requires Docker)
-npm run test:load                # Load tests (requires k6)
+npm run test:tier1              # Tier 1 PR required (lint + build + unit)
+npm run test:tier2              # Tier 2 PR required (integration, Docker)
+npm run test:tier3              # Tier 3 nightly (chaos/perf/bench/load)
+npm run contracts:check         # OpenAPI snapshot + contract locks
+npm run test:synthetic          # Synthetic checks: health, donations, contacts
 ```
 
 ### Monitoring
@@ -109,17 +111,24 @@ Headers included in responses:
 ## Testing
 
 ```bash
-# Run unit tests
-npm run test:unit
+# Tier 1 PR required
+npm run test:tier1
 
-# Run integration tests (requires Docker)
-npm run test:integration
+# Tier 2 PR required with Docker
+npm run test:tier2
 
-# Run E2E tests (requires Playwright installation)
+# Tier 3 nightly stress suites
+npm run test:tier3
+
+# Contract and synthetic checks
+npm run contracts:check
+npm run test:synthetic
+
+# Run backend E2E tests
 npm run test:e2e
 
-# Run load tests (requires k6 installation)
-npm run test:load
+# Optional UI/browser E2E tests (frontend flows)
+npm run test:e2e:ui
 
 # Generate coverage report
 npm run test:coverage
@@ -212,9 +221,9 @@ src/
 └── app.ts               # Application setup
 
 tests/
-├── e2e/                 # End-to-end tests (Playwright)
-│   ├── fixtures/pages/
-│   └── specs/
+├── e2e/                 # Backend end-to-end tests
+│   ├── fixtures/pages/  # UI page objects for optional browser tests
+│   └── specs/           # Optional browser tests (test:e2e:ui)
 ├── helpers/              # Test helpers
 ├── integration/           # Integration tests
 ├── mocks/                # Mock factories

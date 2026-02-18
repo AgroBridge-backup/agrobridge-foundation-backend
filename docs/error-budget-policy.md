@@ -52,13 +52,13 @@ Required override fields:
 
 - `ERROR_BUDGET_OVERRIDE=approved`
 - `ERROR_BUDGET_OVERRIDE_REASON`
-- `ERROR_BUDGET_OVERRIDE_APPROVER`
 
-Approver set:
+Authorization control:
 
-- Staff+/Principal Backend Platform owner
-- Incident Commander on duty
-- Product/Operations owner for customer-impact acknowledgment
+- Override runs must execute in protected GitHub Environments (`preprod` or `canary`) with required reviewers.
+- Reviewer approval is enforced by GitHub environment protection, not by user-entered text fields.
+- Actor identity and run metadata are captured from GitHub context in `error-budget-check.json`.
+- Current repository billing plan does not support required-reviewer environment protection (GitHub API returns HTTP 422); until plan upgrade, this remains a tracked governance gap.
 
 Override evidence is persisted to:
 

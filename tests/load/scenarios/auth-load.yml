@@ -1,0 +1,174 @@
+# Auth Load Testing Scenarios
+# Authentication endpoint load tests
+
+config:
+  target: '{{ $processEnvironment.API_URL || "http://localhost:3000" }}'
+  phases:
+    # Login endpoint test - sustained load
+    - duration: 300
+      arrivalRate: 100
+      name: 'Login Load Test'
+    
+    # Token refresh burst
+    - duration: 60
+      arrivalRate: 200
+      rampTo: 500
+      name: 'Token Refresh Burst'
+
+  payload:
+    - path: '../fixtures/users.csv'
+      skipHeader: true
+      fields:
+        - email
+        - password
+
+scenarios:
+  # Login flow - high frequency
+  - name: 'Login Flow'
+    weight: 70
+    requests:
+      - post:
+          url: '/api/auth/login'
+          json:
+            email: '{{ email }}'
+            password: '{{ password }}'
+          capture:
+            - json: '$.token'
+              as: 'authToken'
+            - json: '$.refreshToken'
+              as: 'refreshToken'
+          expect:
+            - statusCode: 200
+            - contentType: 'application/json'
+
+  # Token refresh - burst pattern
+  - name: 'Token Refresh'
+    weight: 20
+    requests:
+      - post:
+          url: '/api/auth/refresh'
+          json:
+            refreshToken: '{{ refreshToken }}'
+          headers:
+            Authorization: 'Bearer {{ authToken }}'
+          expect:
+            - statusCode: 200
+
+  # Password reset request
+  - name: 'Password Reset Request'
+    weight: 5
+    requests:
+      - post:
+          url: '/api/auth/forgot-password'
+          json:
+            email: '{{ email }}'
+          expect:
+            - statusCode: 200
+
+  # Logout - session cleanup
+  - name: 'Logout'
+    weight: 5
+    requests:
+      - post:
+          url: '/api/auth/logout'
+          headers:
+            Authorization: 'Bearer {{ authToken }}'
+          expect:
+            - statusCode: 204
+
+  # Registration flow - moderate load
+  - name: 'User Registration'
+    weight: 10
+    requests:
+      - post:
+          url: '/api/auth/register'
+          json:
+            email: 'loadtest+{{ $randomString(8) }}@agrobridge.test'
+            password: 'SecurePass123!'
+            firstName: 'Load'
+            lastName: 'Test'
+            newsletterOptIn: false
+          capture:
+            - json: '$.user.id'
+              as: 'newUserId'
+          expect:
+            - statusCode: 201
+
+  # Session validation
+  - name: 'Session Check'
+    weight: 15
+    requests:
+      - get:
+          url: '/api/auth/me'
+          headers:
+            Authorization: 'Bearer {{ authToken }}'
+          expect:
+            - statusCode: 200
+            - hasProperty: 'email'
+
+  # Race condition test - multiple parallel logins
+  - name: 'Concurrent Login Race'
+    weight: 3
+    beforeRequest: 'setParallelContext'
+    requests:
+      - parallel:
+        - post:
+            url: '/api/auth/login'
+            json:
+              email: '{{ email }}'
+              password: '{{ password }}'
+            expect:
+              - statusCode: 200
+        - post:
+            url: '/api/auth/login'
+            json:
+              email: '{{ email }}'
+              password: '{{ password }}'
+            expect:
+              - statusCode: 200
+        - post:
+            url: '/api/auth/login'
+            json:
+              email: '{{ email }}'
+              password: '{{ password }}'
+            expect:
+              - statusCode: 200
+
+  # Rate limit test
+  - name: 'Rate Limit Test'
+    weight: 2
+    requests:
+      - loop:
+        - post:
+            url: '/api/auth/login'
+            json:
+              email: '{{ email }}'
+              password: 'wrongpassword'
+            expect:
+              - statusCode: [401, 429]
+        count: 10
+
+  # MFA challenge flow
+  - name: 'MFA Flow'
+    weight: 2
+    requests:
+      - post:
+          url: '/api/auth/login'
+          json:
+            email: '{{ email }}'
+            password: '{{ password }}'
+            mfaCode: '{{ $randomNumber(100000, 999999) }}'
+          expect:
+            - statusCode: [200, 401]
+
+  # Social login simulation
+  - name: 'Social Login'
+    weight: 5
+    requests:
+      - post:
+          url: '/api/auth/social/google'
+          json:
+            token: '{{ $randomString(100) }}'
+            provider: 'google'
+          expect:
+            - statusCode: [200, 400]

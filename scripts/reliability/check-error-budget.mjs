@@ -6,16 +6,9 @@ import { resolve } from 'node:path';
 const ARTIFACT_DIR = process.env.ARTIFACT_DIR ?? 'artifacts/reliability';
 const ARTIFACT_PATH = resolve(ARTIFACT_DIR, 'error-budget-check.json');
 
-const MIN_REMAINING = Number(process.env.ERROR_BUDGET_MIN_REMAINING ?? 0);
-const MAX_BURN_1H = Number(process.env.ERROR_BUDGET_MAX_BURN_RATE_1H ?? 2);
-const MAX_BURN_6H = Number(process.env.ERROR_BUDGET_MAX_BURN_RATE_6H ?? 1);
-
-const overrideApproved = process.env.ERROR_BUDGET_OVERRIDE === 'approved';
-const overrideReason = process.env.ERROR_BUDGET_OVERRIDE_REASON ?? '';
-const overrideApprover = process.env.ERROR_BUDGET_OVERRIDE_APPROVER ?? '';
-
 const PROM_BASE = process.env.PROMETHEUS_BASE_URL;
 const PROM_TOKEN = process.env.PROMETHEUS_BEARER_TOKEN;
+const ARTIFACT_SENSITIVITY = process.env.ARTIFACT_SENSITIVITY ?? 'restricted-internal';
 
 const REMAINING_QUERY =
   process.env.ERROR_BUDGET_REMAINING_QUERY ?? 'error_budget_remaining_ratio';
@@ -30,6 +23,40 @@ function parseNumeric(value, label) {
     throw new Error(`Expected numeric value for ${label}; got ${value}`);
   }
   return n;
+}
+
+function parseFiniteEnvNumber(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') {
+    return fallback;
+  }
+
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`Invalid numeric policy value for ${name}: ${raw}`);
+  }
+  return parsed;
+}
+
+function buildRunContext() {
+  const runId = process.env.GITHUB_RUN_ID ?? null;
+  const repository = process.env.GITHUB_REPOSITORY ?? null;
+  const server = process.env.GITHUB_SERVER_URL ?? 'https://github.com';
+  const runUrl =
+    runId && repository ? `${server}/${repository}/actions/runs/${runId}` : null;
+
+  return {
+    repository,
+    workflow: process.env.GITHUB_WORKFLOW ?? null,
+    eventName: process.env.GITHUB_EVENT_NAME ?? null,
+    ref: process.env.GITHUB_REF ?? null,
+    sha: process.env.GITHUB_SHA ?? null,
+    runId,
+    runAttempt: process.env.GITHUB_RUN_ATTEMPT ?? null,
+    actor: process.env.GITHUB_ACTOR ?? null,
+    runUrl,
+    environment: process.env.RELEASE_ENVIRONMENT ?? null,
+  };
 }
 
 async function queryPrometheus(query) {
@@ -86,51 +113,62 @@ async function persistArtifact(payload) {
 }
 
 async function main() {
+  const thresholds = {
+    minRemaining: parseFiniteEnvNumber('ERROR_BUDGET_MIN_REMAINING', 0),
+    maxBurnRate1h: parseFiniteEnvNumber('ERROR_BUDGET_MAX_BURN_RATE_1H', 2),
+    maxBurnRate6h: parseFiniteEnvNumber('ERROR_BUDGET_MAX_BURN_RATE_6H', 1),
+  };
+
+  const overrideApproved = process.env.ERROR_BUDGET_OVERRIDE === 'approved';
+  const overrideReason = process.env.ERROR_BUDGET_OVERRIDE_REASON?.trim() ?? '';
+  const runContext = buildRunContext();
+
   const signal = await gatherSignal();
   const breaches = [];
 
-  if (signal.remaining <= MIN_REMAINING) {
+  if (signal.remaining <= thresholds.minRemaining) {
     breaches.push(
-      `Error budget exhausted: remaining=${signal.remaining} threshold>${MIN_REMAINING}`,
+      `Error budget exhausted: remaining=${signal.remaining} threshold>${thresholds.minRemaining}`,
     );
   }
-  if (signal.burnRate1h > MAX_BURN_1H) {
+  if (signal.burnRate1h > thresholds.maxBurnRate1h) {
     breaches.push(
-      `Short-window burn too high: burnRate1h=${signal.burnRate1h} threshold<=${MAX_BURN_1H}`,
+      `Short-window burn too high: burnRate1h=${signal.burnRate1h} threshold<=${thresholds.maxBurnRate1h}`,
     );
   }
-  if (signal.burnRate6h > MAX_BURN_6H) {
+  if (signal.burnRate6h > thresholds.maxBurnRate6h) {
     breaches.push(
-      `Long-window burn too high: burnRate6h=${signal.burnRate6h} threshold<=${MAX_BURN_6H}`,
+      `Long-window burn too high: burnRate6h=${signal.burnRate6h} threshold<=${thresholds.maxBurnRate6h}`,
     );
   }
 
   const report = {
     timestamp: new Date().toISOString(),
+    sha: runContext.sha,
+    runId: runContext.runId,
+    runContext,
+    sensitivity: ARTIFACT_SENSITIVITY,
     signal,
-    thresholds: {
-      minRemaining: MIN_REMAINING,
-      maxBurnRate1h: MAX_BURN_1H,
-      maxBurnRate6h: MAX_BURN_6H,
-    },
+    thresholds,
     breaches,
     override: {
       approved: overrideApproved,
       reason: overrideReason,
-      approver: overrideApprover,
+      approvalSource: 'protected-environment-reviewers',
+      actor: runContext.actor,
     },
   };
 
   if (breaches.length > 0 && overrideApproved) {
-    if (!overrideReason || !overrideApprover) {
+    if (!overrideReason) {
       throw new Error(
-        'ERROR_BUDGET_OVERRIDE is approved but ERROR_BUDGET_OVERRIDE_REASON or ERROR_BUDGET_OVERRIDE_APPROVER is missing.',
+        'ERROR_BUDGET_OVERRIDE is approved but ERROR_BUDGET_OVERRIDE_REASON is missing.',
       );
     }
     report.result = 'override-approved';
     await persistArtifact(report);
     console.warn('Error budget breaches detected but approved override is present.');
-    console.warn(`Approver: ${overrideApprover}`);
+    console.warn(`Actor: ${runContext.actor ?? 'unknown'}`);
     console.warn(`Reason: ${overrideReason}`);
     return;
   }
@@ -151,6 +189,9 @@ async function main() {
 main().catch(async (error) => {
   const report = {
     timestamp: new Date().toISOString(),
+    sensitivity: ARTIFACT_SENSITIVITY,
+    sha: process.env.GITHUB_SHA ?? null,
+    runId: process.env.GITHUB_RUN_ID ?? null,
     result: 'error',
     message: error instanceof Error ? error.message : String(error),
   };

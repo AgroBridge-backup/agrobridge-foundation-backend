@@ -12,7 +12,7 @@
 | Metric         | Endpoint                  | Command                                        |
 | -------------- | ------------------------- | ---------------------------------------------- |
 | Health Check   | `/api/health/rate-limit`      | `curl localhost:3000/api/health/rate-limit` |
-| Deep Health    | `/api/health/rate-limit/deep` | `curl localhost:3000/api/health/rate-limit/deep` |
+| Deep Health (admin auth required) | `/api/health/rate-limit/deep` | `curl -H "Cookie: ab_admin=<signed-jwt>" localhost:3000/api/health/rate-limit/deep` |
 | Redis Ping     | Redis CLI                 | `redis-cli -h <host> -p <port> ping`           |
 | Redis Slow Log | Redis CLI                 | `redis-cli -h <host> -p <port> SLOWLOG GET 10` |
 | Redis Memory   | Redis CLI                 | `redis-cli -h <host> -p <port> INFO memory`    |

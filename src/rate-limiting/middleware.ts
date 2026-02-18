@@ -1,4 +1,4 @@
-import { FastifyRequest, FastifyReply, HookHandlerDoneFunction } from 'fastify';
+import { FastifyRequest, FastifyReply } from 'fastify';
 import { getTieredRateLimiter } from './tiered-rate-limiter.js';
 import { AbuseDetector } from './abuse-detection.js';
 import { RateLimitTier } from './tier-config.js';
@@ -7,7 +7,6 @@ import { trace } from '@opentelemetry/api';
 export async function rateLimitMiddleware(
   req: FastifyRequest,
   reply: FastifyReply,
-  done: HookHandlerDoneFunction,
 ): Promise<void> {
   const limiter = getTieredRateLimiter();
   const abuseDetector = new AbuseDetector();
@@ -62,6 +61,4 @@ export async function rateLimitMiddleware(
   reply.header('X-RateLimit-Limit', limitInfo.limit.toString());
   reply.header('X-RateLimit-Remaining', limitInfo.remaining.toString());
   reply.header('X-RateLimit-Reset', Math.floor(limitInfo.resetTime.getTime() / 1000).toString());
-
-  done();
 }

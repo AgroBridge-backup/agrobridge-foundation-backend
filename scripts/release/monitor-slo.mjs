@@ -5,32 +5,105 @@ import { resolve } from 'node:path';
 
 const ARTIFACT_DIR = process.env.ARTIFACT_DIR ?? 'artifacts/canary';
 const ARTIFACT_PATH = resolve(ARTIFACT_DIR, 'slo-monitor.json');
-
+const ARTIFACT_SENSITIVITY = process.env.ARTIFACT_SENSITIVITY ?? 'restricted-internal';
 const PROMETHEUS_BASE_URL = process.env.PROMETHEUS_BASE_URL;
 const PROMETHEUS_BEARER_TOKEN = process.env.PROMETHEUS_BEARER_TOKEN;
-const OBSERVATION_WINDOW_MINUTES = Number(process.env.SLO_OBSERVATION_WINDOW_MINUTES ?? 10);
-
-const ERROR_RATE_THRESHOLD = Number(process.env.SLO_ERROR_RATE_THRESHOLD ?? 0.02);
-const P95_THRESHOLD_MS = Number(process.env.SLO_P95_MS_THRESHOLD ?? 1000);
-const READINESS_MIN = Number(process.env.SLO_READINESS_MIN ?? 1);
-const P95_UNIT = process.env.SLO_P95_UNIT ?? 'seconds';
-
-const ROUTE_MATCHER = process.env.SLO_ROUTE_MATCHER ?? '/api/health|/api/contacts|/api/donations/intent';
-
-const ERROR_RATE_QUERY =
-  process.env.SLO_ERROR_RATE_QUERY ??
-  `sum(rate(http_requests_total{route=~"${ROUTE_MATCHER}",status=~"5.."}[${OBSERVATION_WINDOW_MINUTES}m])) / clamp_min(sum(rate(http_requests_total{route=~"${ROUTE_MATCHER}"}[${OBSERVATION_WINDOW_MINUTES}m])), 1)`;
-
-const P95_QUERY =
-  process.env.SLO_P95_QUERY ??
-  `histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{route=~"${ROUTE_MATCHER}"}[${OBSERVATION_WINDOW_MINUTES}m])) by (le))`;
-
-const READINESS_QUERY = process.env.SLO_READINESS_QUERY ?? 'min(up{job=~"agrobridge-backend|backend"})';
 
 function parseNumeric(value, label) {
   const n = Number(value);
   if (!Number.isFinite(n)) throw new Error(`Expected numeric value for ${label}, got ${value}`);
   return n;
+}
+
+function parseFiniteEnvNumber(name, fallback, { min } = {}) {
+  const raw = process.env[name];
+  const parsed = raw === undefined || raw === '' ? fallback : Number(raw);
+
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`Invalid numeric policy value for ${name}: ${raw}`);
+  }
+  if (min !== undefined && parsed < min) {
+    throw new Error(`Invalid numeric policy value for ${name}: ${parsed} (must be >= ${min})`);
+  }
+  return parsed;
+}
+
+function escapePrometheusLabelValue(value) {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+function buildRunContext() {
+  const runId = process.env.GITHUB_RUN_ID ?? null;
+  const repository = process.env.GITHUB_REPOSITORY ?? null;
+  const server = process.env.GITHUB_SERVER_URL ?? 'https://github.com';
+  const runUrl =
+    runId && repository ? `${server}/${repository}/actions/runs/${runId}` : null;
+
+  return {
+    repository,
+    workflow: process.env.GITHUB_WORKFLOW ?? null,
+    eventName: process.env.GITHUB_EVENT_NAME ?? null,
+    ref: process.env.GITHUB_REF ?? null,
+    sha: process.env.GITHUB_SHA ?? null,
+    runId,
+    runAttempt: process.env.GITHUB_RUN_ATTEMPT ?? null,
+    actor: process.env.GITHUB_ACTOR ?? null,
+    runUrl,
+    environment: process.env.RELEASE_ENVIRONMENT ?? null,
+  };
+}
+
+function buildPolicy() {
+  const observationWindowMinutes = parseFiniteEnvNumber('SLO_OBSERVATION_WINDOW_MINUTES', 10, {
+    min: 1,
+  });
+  const errorRateThreshold = parseFiniteEnvNumber('SLO_ERROR_RATE_THRESHOLD', 0.02, { min: 0 });
+  const p95ThresholdMs = parseFiniteEnvNumber('SLO_P95_MS_THRESHOLD', 1000, { min: 0 });
+  const readinessMin = parseFiniteEnvNumber('SLO_READINESS_MIN', 1, { min: 0 });
+
+  const p95Unit = process.env.SLO_P95_UNIT ?? 'seconds';
+  if (p95Unit !== 'seconds' && p95Unit !== 'milliseconds') {
+    throw new Error(`Invalid SLO_P95_UNIT: ${p95Unit}. Expected "seconds" or "milliseconds".`);
+  }
+
+  const canaryReleaseId = process.env.CANARY_RELEASE_ID?.trim() ?? '';
+  const canaryLabelKey = process.env.CANARY_RELEASE_LABEL_KEY?.trim() || 'release_id';
+  const explicitCanarySelector = process.env.CANARY_LABEL_SELECTOR?.trim() ?? '';
+  const canarySelector =
+    explicitCanarySelector.length > 0
+      ? explicitCanarySelector
+      : canaryReleaseId.length > 0
+        ? `${canaryLabelKey}="${escapePrometheusLabelValue(canaryReleaseId)}"`
+        : 'deployment="canary"';
+
+  const routeMatcher =
+    process.env.SLO_ROUTE_MATCHER ?? '/api/health|/api/contacts|/api/donations/intent';
+
+  const errorRateQuery =
+    process.env.SLO_ERROR_RATE_QUERY ??
+    `sum by (job, instance, pod) (rate(http_requests_total{${canarySelector},route=~"${routeMatcher}",status=~"5.."}[${observationWindowMinutes}m])) / clamp_min(sum by (job, instance, pod) (rate(http_requests_total{${canarySelector},route=~"${routeMatcher}"}[${observationWindowMinutes}m])), 1)`;
+
+  const p95Query =
+    process.env.SLO_P95_QUERY ??
+    `histogram_quantile(0.95, sum by (le, job, instance, pod) (rate(http_request_duration_seconds_bucket{${canarySelector},route=~"${routeMatcher}"}[${observationWindowMinutes}m])))`;
+
+  const readinessQuery =
+    process.env.SLO_READINESS_QUERY ?? `up{${canarySelector},job=~"agrobridge-backend|backend"}`;
+
+  return {
+    observationWindowMinutes,
+    errorRateThreshold,
+    p95ThresholdMs,
+    readinessMin,
+    p95Unit,
+    canarySelector,
+    canaryReleaseId: canaryReleaseId.length > 0 ? canaryReleaseId : null,
+    queries: {
+      errorRate: errorRateQuery,
+      p95: p95Query,
+      readiness: readinessQuery,
+    },
+  };
 }
 
 async function queryPrometheus(query) {
@@ -52,15 +125,26 @@ async function queryPrometheus(query) {
     throw new Error(`Prometheus returned non-success for query: ${query}`);
   }
 
-  const result = payload?.data?.result?.[0];
-  if (!result?.value?.[1]) {
-    throw new Error(`Prometheus returned no datapoints for query: ${query}`);
+  const resultSet = payload?.data?.result;
+  if (!Array.isArray(resultSet) || resultSet.length === 0) {
+    throw new Error(`Prometheus returned no canary series for query: ${query}`);
   }
+
+  const series = resultSet.map((result, index) => {
+    const rawValue = result?.value?.[1];
+    if (rawValue === undefined) {
+      throw new Error(`Prometheus series ${index} has no datapoint for query: ${query}`);
+    }
+
+    return {
+      metric: result.metric ?? {},
+      value: parseNumeric(rawValue, `${query} series[${index}]`),
+    };
+  });
 
   return {
     query,
-    value: parseNumeric(result.value[1], query),
-    raw: payload?.data?.result ?? [],
+    series,
   };
 }
 
@@ -70,53 +154,74 @@ async function persist(report) {
 }
 
 async function main() {
+  const policy = buildPolicy();
+  const runContext = buildRunContext();
+
   const [errorRateResult, p95Result, readinessResult] = await Promise.all([
-    queryPrometheus(ERROR_RATE_QUERY),
-    queryPrometheus(P95_QUERY),
-    queryPrometheus(READINESS_QUERY),
+    queryPrometheus(policy.queries.errorRate),
+    queryPrometheus(policy.queries.p95),
+    queryPrometheus(policy.queries.readiness),
   ]);
 
-  const p95Ms = P95_UNIT === 'milliseconds' ? p95Result.value : p95Result.value * 1000;
+  const errorRateValues = errorRateResult.series.map((entry) => entry.value);
+  const p95ValuesMs = p95Result.series.map((entry) =>
+    policy.p95Unit === 'milliseconds' ? entry.value : entry.value * 1000,
+  );
+  const readinessValues = readinessResult.series.map((entry) => entry.value);
+
+  const worstCaseErrorRate = Math.max(...errorRateValues);
+  const worstCaseP95Ms = Math.max(...p95ValuesMs);
+  const worstCaseReadiness = Math.min(...readinessValues);
 
   const breaches = [];
-  if (errorRateResult.value > ERROR_RATE_THRESHOLD) {
+  if (worstCaseErrorRate > policy.errorRateThreshold) {
     breaches.push(
-      `error_rate=${errorRateResult.value} exceeded threshold=${ERROR_RATE_THRESHOLD}`,
+      `error_rate_max=${worstCaseErrorRate} exceeded threshold=${policy.errorRateThreshold}`,
     );
   }
-  if (p95Ms > P95_THRESHOLD_MS) {
-    breaches.push(`p95_ms=${p95Ms} exceeded threshold=${P95_THRESHOLD_MS}`);
+  if (worstCaseP95Ms > policy.p95ThresholdMs) {
+    breaches.push(`p95_ms_max=${worstCaseP95Ms} exceeded threshold=${policy.p95ThresholdMs}`);
   }
-  if (readinessResult.value < READINESS_MIN) {
-    breaches.push(`readiness=${readinessResult.value} below threshold=${READINESS_MIN}`);
+  if (worstCaseReadiness < policy.readinessMin) {
+    breaches.push(`readiness_min=${worstCaseReadiness} below threshold=${policy.readinessMin}`);
   }
 
   const report = {
     timestamp: new Date().toISOString(),
-    observationWindowMinutes: OBSERVATION_WINDOW_MINUTES,
+    sha: runContext.sha,
+    runId: runContext.runId,
+    runContext,
+    sensitivity: ARTIFACT_SENSITIVITY,
+    observationWindowMinutes: policy.observationWindowMinutes,
     thresholds: {
-      errorRate: ERROR_RATE_THRESHOLD,
-      p95Ms: P95_THRESHOLD_MS,
-      readinessMin: READINESS_MIN,
+      errorRate: policy.errorRateThreshold,
+      p95Ms: policy.p95ThresholdMs,
+      readinessMin: policy.readinessMin,
+    },
+    canaryScope: {
+      selector: policy.canarySelector,
+      releaseId: policy.canaryReleaseId,
     },
     metrics: {
-      errorRate: errorRateResult.value,
-      p95Ms,
-      readiness: readinessResult.value,
+      worstCase: {
+        errorRateMax: worstCaseErrorRate,
+        p95MsMax: worstCaseP95Ms,
+        readinessMin: worstCaseReadiness,
+      },
+      series: {
+        errorRate: errorRateResult.series,
+        p95Ms: p95Result.series.map((entry, index) => ({
+          metric: entry.metric,
+          value: p95ValuesMs[index],
+        })),
+        readiness: readinessResult.series,
+      },
     },
-    queries: {
-      errorRate: errorRateResult.query,
-      p95: p95Result.query,
-      readiness: readinessResult.query,
-    },
-    raw: {
-      errorRate: errorRateResult.raw,
-      p95: p95Result.raw,
-      readiness: readinessResult.raw,
-    },
+    queries: policy.queries,
     breaches,
   };
 
+  report.result = breaches.length > 0 ? 'fail' : 'pass';
   await persist(report);
 
   if (breaches.length > 0) {
@@ -131,6 +236,10 @@ async function main() {
 main().catch(async (error) => {
   const report = {
     timestamp: new Date().toISOString(),
+    sensitivity: ARTIFACT_SENSITIVITY,
+    sha: process.env.GITHUB_SHA ?? null,
+    runId: process.env.GITHUB_RUN_ID ?? null,
+    result: 'error',
     error: error instanceof Error ? error.message : String(error),
   };
   await persist(report);

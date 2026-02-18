@@ -1,0 +1,249 @@
+{
+  "dashboard": {
+    "id": "security-dashboard",
+    "title": "AgroBridge Foundation - Security Monitoring",
+    "tags": ["security", "threat-detection", "monitoring"],
+    "timezone": "browser",
+    "schemaVersion": 36,
+    "refresh": "10s",
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "templating": {
+      "list": [
+        {
+          "name": "datasource",
+          "type": "datasource",
+          "query": "prometheus",
+          "current": {
+            "selected": false,
+            "text": "Prometheus",
+            "value": "prometheus"
+          }
+        }
+      ]
+    },
+    "annotations": {
+      "list": [
+        {
+          "name": "Security Events",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "increase(security_threat_detection_total[1m]) > 0",
+          "tagKeys": "type,severity",
+          "textFormat": "{{type}} - {{severity}}",
+          "iconColor": "red"
+        }
+      ]
+    },
+    "panels": [
+      {
+        "id": 1,
+        "title": "Security Overview",
+        "type": "stat",
+        "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+        "targets": [
+          {
+            "expr": "sum(security_threat_detection_total)",
+            "legendFormat": "Total Threats"
+          },
+          {
+            "expr": "security_active_threats",
+            "legendFormat": "Active Threats"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "thresholds": {
+              "steps": [
+                { "color": "green", "value": null },
+                { "color": "yellow", "value": 10 },
+                { "color": "red", "value": 50 }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 2,
+        "title": "Threats by Severity",
+        "type": "piechart",
+        "gridPos": { "h": 8, "w": 6, "x": 6, "y": 0 },
+        "targets": [
+          {
+            "expr": "sum by (severity) (security_threat_detection_total)",
+            "legendFormat": "{{severity}}"
+          }
+        ],
+        "options": {
+          "legend": { "displayMode": "table", "placement": "right" }
+        }
+      },
+      {
+        "id": 3,
+        "title": "Threats by Type",
+        "type": "barchart",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+        "targets": [
+          {
+            "expr": "sum by (type) (security_threat_detection_total)",
+            "legendFormat": "{{type}}"
+          }
+        ]
+      },
+      {
+        "id": 4,
+        "title": "Threat Detection Rate",
+        "type": "graph",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+        "targets": [
+          {
+            "expr": "rate(security_threat_detection_total[5m])",
+            "legendFormat": "{{type}} - {{severity}}"
+          }
+        ],
+        "yAxes": [
+          { "label": "Threats/sec" }
+        ]
+      },
+      {
+        "id": 5,
+        "title": "Detection Latency",
+        "type": "heatmap",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+        "targets": [
+          {
+            "expr": "rate(security_detection_latency_seconds_bucket[5m])",
+            "legendFormat": "{{le}}"
+          }
+        ],
+        "dataFormat": "tsbuckets"
+      },
+      {
+        "id": 6,
+        "title": "Top Attacking IPs",
+        "type": "table",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+        "targets": [
+          {
+            "expr": "topk(10, sum by (source_ip) (security_events_by_ip))",
+            "format": "table",
+            "instant": true
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "includeByName": {
+                "source_ip": true,
+                "Value": true
+              },
+              "renameByName": {
+                "source_ip": "IP Address",
+                "Value": "Event Count"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": 7,
+        "title": "Blocked IPs",
+        "type": "stat",
+        "gridPos": { "h": 4, "w": 6, "x": 0, "y": 4 },
+        "targets": [
+          {
+            "expr": "security_blocked_ips",
+            "legendFormat": "Currently Blocked"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "thresholds": {
+              "steps": [
+                { "color": "green", "value": null },
+                { "color": "yellow", "value": 5 },
+                { "color": "red", "value": 20 }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 8,
+        "title": "Alert Status",
+        "type": "table",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+        "targets": [
+          {
+            "expr": "security_alerts_total",
+            "format": "table",
+            "instant": true
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "includeByName": {
+                "channel": true,
+                "severity": true,
+                "Value": true
+              },
+              "renameByName": {
+                "channel": "Channel",
+                "severity": "Severity",
+                "Value": "Count"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": 9,
+        "title": "Recent Security Events",
+        "type": "logs",
+        "gridPos": { "h": 12, "w": 24, "x": 0, "y": 24 },
+        "targets": [
+          {
+            "expr": "{job=\"agrobridge-security\"} | json | line_format \"{{.timestamp}} [{{.severity}}] {{.type}} - {{.sourceIp}}\"",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "showTime": true,
+          "wrapLogMessage": true,
+          "sortOrder": "Descending"
+        }
+      },
+      {
+        "id": 10,
+        "title": "Auto-Response Actions",
+        "type": "bargauge",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 36 },
+        "targets": [
+          {
+            "expr": "sum by (action) (security_response_actions_total)",
+            "legendFormat": "{{action}}"
+          }
+        ]
+      },
+      {
+        "id": 11,
+        "title": "Anomaly Detection",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 36 },
+        "targets": [
+          {
+            "expr": "rate(anomaly_detected_total[5m])",
+            "legendFormat": "{{type}}"
+          }
+        ]
+      }
+    ]
+  }
+}

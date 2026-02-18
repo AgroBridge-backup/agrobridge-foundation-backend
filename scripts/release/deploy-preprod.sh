@@ -25,6 +25,9 @@ mkdir -p "$ARTIFACT_DIR"
 SHA="${GITHUB_SHA:-$(git rev-parse HEAD 2>/dev/null || echo unknown)}"
 BUILD_ARTIFACT_PATH="$ARTIFACT_DIR/backend-dist-${SHA}.tar.gz"
 METADATA_PATH="$ARTIFACT_DIR/deploy-preprod-metadata.json"
+COMMAND_HASH="$(printf '%s' "$PREPROD_DEPLOY_COMMAND" | shasum -a 256 | awk '{print $1}')"
+COMMAND_IDENTIFIER="${PREPROD_DEPLOY_COMMAND_ID:-sha256:${COMMAND_HASH}}"
+ARTIFACT_SENSITIVITY="${ARTIFACT_SENSITIVITY:-restricted-internal}"
 
 tar -czf "$BUILD_ARTIFACT_PATH" dist prisma package.json package-lock.json
 
@@ -37,13 +40,27 @@ PREPROD_BASE_URL="$PREPROD_BASE_URL" \
 GIT_SHA="$SHA" \
 bash -lc "$PREPROD_DEPLOY_COMMAND" 2>&1 | tee "$DEPLOY_LOG_PATH"
 
-cat >"$METADATA_PATH" <<JSON
-{
-  "sha": "$SHA",
-  "artifactPath": "$BUILD_ARTIFACT_PATH",
-  "deployCommand": "$PREPROD_DEPLOY_COMMAND",
-  "preprodBaseUrl": "$PREPROD_BASE_URL"
-}
-JSON
+SHA="$SHA" \
+ARTIFACT_PATH="$BUILD_ARTIFACT_PATH" \
+COMMAND_HASH="$COMMAND_HASH" \
+COMMAND_IDENTIFIER="$COMMAND_IDENTIFIER" \
+PREPROD_BASE_URL="$PREPROD_BASE_URL" \
+ARTIFACT_SENSITIVITY="$ARTIFACT_SENSITIVITY" \
+METADATA_PATH="$METADATA_PATH" \
+node <<'NODE'
+const fs = require('fs');
+
+const payload = {
+  sha: process.env.SHA,
+  artifactPath: process.env.ARTIFACT_PATH,
+  commandHash: process.env.COMMAND_HASH,
+  commandIdentifier: process.env.COMMAND_IDENTIFIER,
+  preprodBaseUrl: process.env.PREPROD_BASE_URL,
+  sensitivity: process.env.ARTIFACT_SENSITIVITY,
+  generatedAt: new Date().toISOString(),
+};
+
+fs.writeFileSync(process.env.METADATA_PATH, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+NODE
 
 echo "Preprod deploy step completed."

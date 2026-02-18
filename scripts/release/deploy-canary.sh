@@ -27,6 +27,7 @@ mkdir -p "$ARTIFACT_DIR"
 SHA="${GITHUB_SHA:-$(git rev-parse HEAD 2>/dev/null || echo unknown)}"
 BUILD_ARTIFACT_PATH="$ARTIFACT_DIR/backend-dist-canary-${SHA}.tar.gz"
 METADATA_PATH="$ARTIFACT_DIR/deploy-canary-metadata.json"
+ARTIFACT_SENSITIVITY="${ARTIFACT_SENSITIVITY:-restricted-internal}"
 
 tar -czf "$BUILD_ARTIFACT_PATH" dist prisma package.json package-lock.json
 
@@ -47,14 +48,27 @@ if [[ -f "$CANARY_RELEASE_ID_FILE" ]]; then
   CANARY_RELEASE_ID="$(tr -d '[:space:]' <"$CANARY_RELEASE_ID_FILE")"
 fi
 
-cat >"$METADATA_PATH" <<JSON
-{
-  "sha": "$SHA",
-  "artifactPath": "$BUILD_ARTIFACT_PATH",
-  "canaryBaseUrl": "$CANARY_BASE_URL",
-  "canaryTrafficPercent": "$CANARY_TRAFFIC_PERCENT",
-  "canaryReleaseId": "$CANARY_RELEASE_ID"
-}
-JSON
+SHA="$SHA" \
+ARTIFACT_PATH="$BUILD_ARTIFACT_PATH" \
+CANARY_BASE_URL="$CANARY_BASE_URL" \
+CANARY_TRAFFIC_PERCENT="$CANARY_TRAFFIC_PERCENT" \
+CANARY_RELEASE_ID="$CANARY_RELEASE_ID" \
+ARTIFACT_SENSITIVITY="$ARTIFACT_SENSITIVITY" \
+METADATA_PATH="$METADATA_PATH" \
+node <<'NODE'
+const fs = require('fs');
+
+const payload = {
+  sha: process.env.SHA,
+  artifactPath: process.env.ARTIFACT_PATH,
+  canaryBaseUrl: process.env.CANARY_BASE_URL,
+  canaryTrafficPercent: process.env.CANARY_TRAFFIC_PERCENT,
+  canaryReleaseId: process.env.CANARY_RELEASE_ID || null,
+  sensitivity: process.env.ARTIFACT_SENSITIVITY,
+  generatedAt: new Date().toISOString(),
+};
+
+fs.writeFileSync(process.env.METADATA_PATH, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+NODE
 
 echo "Canary deploy step completed."

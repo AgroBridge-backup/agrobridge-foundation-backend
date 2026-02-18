@@ -1,0 +1,275 @@
+# Donation Load Testing Scenarios
+# Donation endpoint load tests with race condition detection
+
+config:
+  target: '{{ $processEnvironment.API_URL || "http://localhost:3000" }}'
+  phases:
+    # Normal donation flow - sustained load
+    - duration: 300
+      arrivalRate: 50
+      name: 'Normal Donation Load'
+    
+    # Campaign deadline spike
+    - duration: 120
+      arrivalRate: 100
+      rampTo: 300
+      name: 'Campaign Deadline Spike'
+    
+    # Concurrent donation burst - race condition test
+    - duration: 60
+      arrivalRate: 500
+      name: 'Concurrent Donation Burst'
+
+  payload:
+    - path: '../fixtures/donations.csv'
+      skipHeader: true
+      fields:
+        - donorEmail
+        - donorName
+        - amount
+        - campaignId
+
+scenarios:
+  # Standard one-time donation
+  - name: 'One-Time Donation'
+    weight: 60
+    beforeRequest: 'setDonationContext'
+    requests:
+      - post:
+          url: '/api/donations'
+          json:
+            amount: '{{ amount }}'
+            currency: 'USD'
+            donorEmail: '{{ donorEmail }}'
+            donorName: '{{ donorName }}'
+            campaignId: '{{ campaignId }}'
+            isRecurring: false
+            paymentMethod: 'card'
+          capture:
+            - json: '$.donation.id'
+              as: 'donationId'
+            - json: '$.stripeClientSecret'
+              as: 'clientSecret'
+          expect:
+            - statusCode: 201
+            - hasProperty: 'donation.id'
+            - hasProperty: 'stripeClientSecret'
+
+  # Recurring donation setup
+  - name: 'Recurring Donation'
+    weight: 25
+    requests:
+      - post:
+          url: '/api/donations'
+          json:
+            amount: '{{ $randomNumber(10, 500) }}'
+            currency: 'USD'
+            donorEmail: '{{ donorEmail }}'
+            donorName: '{{ donorName }}'
+            campaignId: '{{ campaignId }}'
+            isRecurring: true
+            frequency: 'monthly'
+            paymentMethod: 'card'
+          expect:
+            - statusCode: 201
+
+  # Concurrent donations - same campaign (race condition test)
+  - name: 'Concurrent Campaign Donations'
+    weight: 15
+    beforeRequest: 'setRaceConditionContext'
+    requests:
+      - parallel:
+        - post:
+            url: '/api/donations'
+            json:
+              amount: '50'
+              currency: 'USD'
+              donorEmail: 'concurrent1@test.com'
+              donorName: 'Concurrent User 1'
+              campaignId: 'campaign-race-test'
+              isRecurring: false
+        - post:
+            url: '/api/donations'
+            json:
+              amount: '75'
+              currency: 'USD'
+              donorEmail: 'concurrent2@test.com'
+              donorName: 'Concurrent User 2'
+              campaignId: 'campaign-race-test'
+              isRecurring: false
+        - post:
+            url: '/api/donations'
+            json:
+              amount: '100'
+              currency: 'USD'
+              donorEmail: 'concurrent3@test.com'
+              donorName: 'Concurrent User 3'
+              campaignId: 'campaign-race-test'
+              isRecurring: false
+        - post:
+            url: '/api/donations'
+            json:
+              amount: '125'
+              currency: 'USD'
+              donorEmail: 'concurrent4@test.com'
+              donorName: 'Concurrent User 4'
+              campaignId: 'campaign-race-test'
+              isRecurring: false
+        capture:
+          - json: '$[0].donation.id'
+            as: 'donationId1'
+          - json: '$[1].donation.id'
+            as: 'donationId2'
+          - json: '$[2].donation.id'
+            as: 'donationId3'
+          - json: '$[3].donation.id'
+            as: 'donationId4'
+
+  # Campaign progress check during donations
+  - name: 'Campaign Progress During Donations'
+    weight: 10
+    requests:
+      - post:
+          url: '/api/donations'
+          json:
+            amount: '{{ $randomNumber(5, 100) }}'
+            currency: 'USD'
+            donorEmail: '{{ donorEmail }}'
+            donorName: '{{ donorName }}'
+            campaignId: '{{ campaignId }}'
+            isRecurring: false
+      - get:
+          url: '/api/campaigns/{{ campaignId }}/progress'
+          expect:
+            - statusCode: 200
+            - hasProperty: 'raisedAmount'
+            - hasProperty: 'goalAmount'
+            - hasProperty: 'percentageComplete'
+
+  # Double-click protection test
+  - name: 'Double Click Protection'
+    weight: 8
+    beforeRequest: 'setIdempotencyKey'
+    requests:
+      - post:
+          url: '/api/donations'
+          json:
+            amount: '100'
+            currency: 'USD'
+            donorEmail: 'doubleclick@test.com'
+            donorName: 'Double Click Test'
+            campaignId: '{{ campaignId }}'
+            isRecurring: false
+            idempotencyKey: '{{ idempotencyKey }}'
+      - post:
+          url: '/api/donations'
+          json:
+            amount: '100'
+            currency: 'USD'
+            donorEmail: 'doubleclick@test.com'
+            donorName: 'Double Click Test'
+            campaignId: '{{ campaignId }}'
+            isRecurring: false
+            idempotencyKey: '{{ idempotencyKey }}'
+          expect:
+            - statusCode: 409
+
+  # Webhook processing load
+  - name: 'Stripe Webhook Processing'
+    weight: 20
+    requests:
+      - post:
+          url: '/api/webhooks/stripe'
+          headers:
+            Stripe-Signature: '{{ $randomString(64) }}'
+          json:
+            id: '{{ $randomUUID() }}'
+            object: 'event'
+            type: 'payment_intent.succeeded'
+            data:
+              object:
+                id: 'pi_{{ $randomString(14) }}'
+                amount: '{{ $randomNumber(500, 50000) }}'
+                currency: 'usd'
+                status: 'succeeded'
+          expect:
+            - statusCode: [200, 400]
+
+  # Donation receipt generation
+  - name: 'Receipt Generation Load'
+    weight: 12
+    requests:
+      - get:
+          url: '/api/donations/{{ $randomUUID() }}/receipt'
+          headers:
+            Authorization: 'Bearer {{ $processEnvironment.TEST_AUTH_TOKEN }}'
+          expect:
+            - statusCode: [200, 404]
+
+  # Campaign listing with donations
+  - name: 'Campaign List With Donations'
+    weight: 15
+    requests:
+      - get:
+          url: '/api/campaigns?includeDonations=true&limit=10'
+          expect:
+            - statusCode: 200
+            - hasProperty: 'campaigns'
+
+  # Anonymous donation flow
+  - name: 'Anonymous Donation'
+    weight: 8
+    requests:
+      - post:
+          url: '/api/donations'
+          json:
+            amount: '{{ $randomNumber(5, 200) }}'
+            currency: 'USD'
+            isAnonymous: true
+            campaignId: '{{ campaignId }}'
+            isRecurring: false
+          expect:
+            - statusCode: 201
+
+  # Large donation load test
+  - name: 'Large Donation Processing'
+    weight: 5
+    requests:
+      - post:
+          url: '/api/donations'
+          json:
+            amount: '{{ $randomNumber(1000, 10000) }}'
+            currency: 'USD'
+            donorEmail: 'largedonor@test.com'
+            donorName: 'Large Donor'
+            campaignId: '{{ campaignId }}'
+            isRecurring: false
+            requiresReview: true
+          expect:
+            - statusCode: 201
+
+  # Refund processing
+  - name: 'Refund Request'
+    weight: 3
+    requests:
+      - post:
+          url: '/api/donations/{{ $randomUUID() }}/refund'
+          headers:
+            Authorization: 'Bearer {{ $processEnvironment.ADMIN_AUTH_TOKEN }}'
+          json:
+            reason: 'Load test refund'
+          expect:
+            - statusCode: [200, 404]
+
+  # Payment intent creation rate test
+  - name: 'Payment Intent Creation'
+    weight: 10
+    requests:
+      - post:
+          url: '/api/donations/intent'
+          json:
+            amount: '{{ $randomNumber(10, 500) }}'
+            currency: 'USD'
+          expect:
+            - statusCode: 200
+            - hasProperty: 'clientSecret'

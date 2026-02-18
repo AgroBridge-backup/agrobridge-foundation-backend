@@ -9,7 +9,7 @@ import { startTestDb, stopTestDb } from './test-db.js';
 
 let prisma: PrismaClient;
 
-describe('Integration /api/auth/login', { skip: !process.env.DOCKER_HOST && !process.env.TESTCONTAINERS_HOST_OVERRIDE }, () => {
+describe('Integration /api/auth/login', () => {
   beforeAll(async () => {
     setTestEnv();
     const started = await startTestDb();
@@ -26,22 +26,59 @@ describe('Integration /api/auth/login', { skip: !process.env.DOCKER_HOST && !pro
   });
 
   it('sets signed httpOnly cookie and updates lastLoginAt', async () => {
-    const app = buildApp({ logger: false });
+    const app = await buildApp({ logger: false });
+    await app.ready();
 
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/auth/login',
-      payload: { email: 'admin@example.com', password: 'pw123' },
+    try {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/auth/login',
+        payload: { email: 'admin@example.com', password: 'pw123' },
+      });
+
+      expect(res.statusCode).toBe(200);
+
+      const setCookie = res.headers['set-cookie'];
+      expect(setCookie).toContain('ab_admin=');
+      expect(setCookie).toContain('HttpOnly');
+      expect(setCookie).toContain('SameSite=Lax');
+
+      const updated = await prisma.adminUser.findUnique({ where: { email: 'admin@example.com' } });
+      expect(updated?.lastLoginAt).toBeInstanceOf(Date);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('blocks login when account is locked in the database', async () => {
+    await prisma.adminUser.update({
+      where: { email: 'admin@example.com' },
+      data: {
+        failedAttempts: 5,
+        lockedUntil: new Date(Date.now() + 60_000),
+      },
     });
 
-    expect(res.statusCode).toBe(200);
+    const app = await buildApp({ logger: false });
+    await app.ready();
 
-    const setCookie = res.headers['set-cookie'];
-    expect(setCookie).toContain('ab_admin=');
-    expect(setCookie).toContain('HttpOnly');
-    expect(setCookie).toContain('SameSite=Lax');
+    try {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/auth/login',
+        payload: { email: 'admin@example.com', password: 'pw123' },
+      });
 
-    const updated = await prisma.adminUser.findUnique({ where: { email: 'admin@example.com' } });
-    expect(updated?.lastLoginAt).toBeInstanceOf(Date);
+      expect(res.statusCode).toBe(429);
+      expect(res.headers['retry-after']).toBeDefined();
+      expect(res.json()).toMatchObject({
+        ok: false,
+        error: {
+          code: 'ACCOUNT_LOCKED',
+        },
+      });
+    } finally {
+      await app.close();
+    }
   });
 });

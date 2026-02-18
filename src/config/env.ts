@@ -5,11 +5,16 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   DATABASE_URL: z.string().min(1),
   JWT_SECRET: z.string().min(32),
+  /** Previous JWT secret for zero-downtime rotation. When rotating secrets,
+   *  set this to the old JWT_SECRET value so existing tokens still verify
+   *  during the rotation window (typically 24h = max token lifetime). */
+  JWT_SECRET_PREVIOUS: z.string().min(32).optional(),
   COOKIE_SECRET: z.string().min(16),
   STRIPE_SECRET_KEY: z.string().min(1),
   STRIPE_WEBHOOK_SECRET: z.string().min(1),
   STRIPE_API_VERSION: z.string().min(1),
   CORS_ORIGIN: z.string(),
+  DONATION_REDIRECT_ORIGINS: z.string().optional(),
   REDIS_URL: z.string().url().default('redis://localhost:6379'),
   // Optional OpenTelemetry collector endpoint. Example:
   // http://localhost:4318/v1/traces

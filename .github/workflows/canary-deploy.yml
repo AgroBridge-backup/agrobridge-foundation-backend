@@ -12,15 +12,9 @@ on:
         description: 'Required if override is true'
         type: string
         required: false
-      override_approver:
-        description: 'Required if override is true'
-        type: string
-        required: false
-  workflow_run:
-    workflows:
-      - Preprod Release Gate
-    types:
-      - completed
+  push:
+    tags:
+      - 'release-*'
 
 permissions:
   contents: read
@@ -33,12 +27,9 @@ jobs:
   canary-deploy:
     name: canary-deploy
     runs-on: ubuntu-latest
+    environment:
+      name: canary
     timeout-minutes: 60
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'workflow_run' &&
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_branch == 'main')
     env:
       CANARY_BASE_URL: ${{ secrets.CANARY_BASE_URL }}
       CANARY_DEPLOY_COMMAND: ${{ secrets.CANARY_DEPLOY_COMMAND }}
@@ -47,30 +38,16 @@ jobs:
       PROMETHEUS_BEARER_TOKEN: ${{ secrets.PROMETHEUS_BEARER_TOKEN }}
       ERROR_BUDGET_OVERRIDE: ${{ github.event_name == 'workflow_dispatch' && inputs.error_budget_override && 'approved' || '' }}
       ERROR_BUDGET_OVERRIDE_REASON: ${{ github.event_name == 'workflow_dispatch' && inputs.override_reason || '' }}
-      ERROR_BUDGET_OVERRIDE_APPROVER: ${{ github.event_name == 'workflow_dispatch' && inputs.override_approver || '' }}
+      ARTIFACT_SENSITIVITY: restricted-internal
+      RELEASE_ENVIRONMENT: canary
     steps:
-      - name: Resolve checkout ref
-        id: checkout_ref
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_run" ]; then
-            echo "value=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "value=${{ github.sha }}" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ steps.checkout_ref.outputs.value }}
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Setup Node and install dependencies
+        uses: ./.github/actions/setup-node-install
         with:
-          node-version: 20
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
+          node-version: '20'
 
       - name: Generate Prisma client
         run: npm run prisma:generate
@@ -91,12 +68,24 @@ jobs:
           set -o pipefail
           ./scripts/release/deploy-canary.sh 2>&1 | tee artifacts/canary/deploy-canary.log
 
+      - name: Resolve canary release identifier
+        id: canary_release
+        if: always()
+        run: |
+          RELEASE_ID=""
+          if [ -f artifacts/canary/deploy-canary-metadata.json ]; then
+            RELEASE_ID="$(node -e "const fs=require('fs');try{const parsed=JSON.parse(fs.readFileSync('artifacts/canary/deploy-canary-metadata.json','utf8'));process.stdout.write(String(parsed.canaryReleaseId ?? ''));}catch{process.stdout.write('');}")"
+          fi
+          printf 'release_id=%s\n' "$RELEASE_ID" >> "$GITHUB_OUTPUT"
+
       - name: Monitor canary SLOs
         id: monitor_canary
         run: |
           mkdir -p artifacts/canary
           set -o pipefail
           node ./scripts/release/monitor-slo.mjs 2>&1 | tee artifacts/canary/monitor-slo.log
+        env:
+          CANARY_RELEASE_ID: ${{ steps.canary_release.outputs.release_id }}
 
       - name: Roll back canary on SLO breach
         if: always() && (steps.deploy_canary.outcome == 'failure' || steps.monitor_canary.outcome == 'failure')
@@ -107,12 +96,13 @@ jobs:
 
       - name: Upload canary artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: canary-deploy-artifacts
           path: |
             artifacts/canary
             artifacts/reliability
+          retention-days: 30
           if-no-files-found: ignore
 
       - name: Publish summary

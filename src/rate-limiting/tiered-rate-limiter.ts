@@ -10,6 +10,9 @@ import {
 import { requestContext } from '../observability/request-context.js';
 import { RateLimitStore } from './rate-limit-store.js';
 import { InMemoryRateLimitStore } from './in-memory-rate-limit-store.js';
+import { getRedisClient } from '../cache/redis-client.js';
+import { loadEnv } from '../config/env.js';
+import { RedisRateLimitStore } from './redis-rate-limit-store.js';
 import * as metrics from '../observability/metrics/rate-limiting-metrics.js';
 
 interface RateLimitInfo {
@@ -33,11 +36,8 @@ export class TieredRateLimiter {
 
   private initializeStore(): RateLimitStore {
     try {
-      const { getRedisClient } = require('../cache/redis-client.js');
-      const { loadEnv } = require('../config/env.js');
       const env = loadEnv();
       const redis = getRedisClient(env);
-      const { RedisRateLimitStore } = require('./redis-rate-limit-store.js');
       return new RedisRateLimitStore(redis, new InMemoryRateLimitStore());
     } catch (err) {
       const log = requestContext.getLog();

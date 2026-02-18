@@ -24,7 +24,7 @@ for (const file of files) {
 
   // Add app-error import after vitest import
   content = content.replace(
-    /(from 'vitest'\;)/,
+    /(from 'vitest';)/,
     "$1\nimport { Errors } from '../../src/errors/app-error.js';",
   );
 

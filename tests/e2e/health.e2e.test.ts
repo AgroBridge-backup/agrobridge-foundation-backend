@@ -7,15 +7,20 @@ describe('E2E /api/health', () => {
     const { setTestEnv } = await import('../helpers/env.js');
     setTestEnv();
 
-    const app = buildApp({ logger: false });
+    const app = await buildApp({ logger: false });
+    await app.ready();
 
-    const res = await app.inject({ method: 'GET', url: '/api/health' });
+    try {
+      const res = await app.inject({ method: 'GET', url: '/api/health' });
 
-    // With a fake DATABASE_URL, health should report dependency unready.
-    expect(res.statusCode).toBe(503);
-    expect(res.json()).toMatchObject({
-      ok: false,
-      error: { code: 'INTERNAL_ERROR', message: 'DB unavailable' },
-    });
+      // With a fake DATABASE_URL, health should report dependency unready.
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toMatchObject({
+        ok: false,
+        error: { code: 'INTERNAL_ERROR', message: 'DB unavailable' },
+      });
+    } finally {
+      await app.close();
+    }
   });
 });

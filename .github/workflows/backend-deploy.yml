@@ -1,0 +1,359 @@
+name: Backend Deploy
+
+on:
+  workflow_run:
+    workflows: ["Backend Gates"]
+    types:
+      - completed
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        type: choice
+        options:
+          - staging
+          - production
+        default: staging
+        required: true
+      skip_gates:
+        description: 'Skip gate check (emergency only)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  deployments: write
+
+concurrency:
+  group: backend-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '20'
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # ─── Gate verification ─────────────────────────────────────────────
+  verify-gates:
+    name: Verify Gates Passed
+    runs-on: ubuntu-latest
+    outputs:
+      should_deploy: ${{ steps.check.outputs.should_deploy }}
+    steps:
+      - name: Check gate results
+        id: check
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.skip_gates }}" = "true" ]; then
+            echo "⚠️  Emergency deploy — gates skipped"
+            echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            if [ "${{ github.event.workflow_run.conclusion }}" != "success" ]; then
+              echo "❌ Backend Gates did not pass"
+              echo "should_deploy=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+
+          echo "✅ Gates verified"
+          echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+
+  # ─── Build Docker image ────────────────────────────────────────────
+  build:
+    name: Build & Push Image
+    runs-on: ubuntu-latest
+    needs: [verify-gates]
+    if: needs.verify-gates.outputs.should_deploy == 'true'
+    outputs:
+      image_tag: ${{ steps.meta.outputs.version }}
+      image_digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Setup Node and install dependencies
+        uses: ./.github/actions/setup-node-install
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Generate Prisma client
+        run: npm run prisma:generate
+
+      - name: Build TypeScript
+        run: npm run build
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@8e5442c4ef9f78752691e2d8f8d19755c6f78e81
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=,format=short
+            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Login to Container Registry
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        id: push
+        uses: docker/build-push-action@4f58ea79222b3b9dc2c8bbdd6debcef730109a75
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            NODE_VERSION=${{ env.NODE_VERSION }}
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@61119d458adab75f756bc0b9e4bde25725f86a7a
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.push.outputs.digest }}
+          artifact-name: sbom-backend.spdx.json
+          output-file: sbom-backend.spdx.json
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: deploy-artifacts
+          path: |
+            sbom-backend.spdx.json
+          retention-days: 90
+
+  # ─── Deploy to Staging ─────────────────────────────────────────────
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [build]
+    environment:
+      name: staging
+      url: https://staging.api.agrobridgefoundation.org
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Setup Node and install dependencies
+        uses: ./.github/actions/setup-node-install
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Run database migrations (staging)
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        with:
+          host: ${{ secrets.STAGING_SERVER_HOST }}
+          username: ${{ secrets.STAGING_SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.STAGING_SSH_PORT || 2222 }}
+          script: |
+            cd /var/www/agrobridge-backend
+            export DATABASE_URL="${{ secrets.STAGING_DATABASE_URL }}"
+            npx prisma migrate deploy
+            echo "✓ Staging migrations applied"
+
+      - name: Deploy container to staging
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        with:
+          host: ${{ secrets.STAGING_SERVER_HOST }}
+          username: ${{ secrets.STAGING_SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.STAGING_SSH_PORT || 2222 }}
+          script: |
+            IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build.outputs.image_tag }}"
+            docker pull "$IMAGE"
+            docker stop agrobridge-backend-staging || true
+            docker rm agrobridge-backend-staging || true
+            docker run -d \
+              --name agrobridge-backend-staging \
+              --restart unless-stopped \
+              --env-file /var/www/agrobridge-backend/.env.staging \
+              -p 3000:3000 \
+              "$IMAGE"
+            echo "✓ Staging container deployed: $IMAGE"
+
+      - name: Health check (staging)
+        run: |
+          echo "Waiting for staging to be ready..."
+          for i in $(seq 1 30); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+              https://staging.api.agrobridgefoundation.org/health || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "✓ Staging health check passed (attempt $i)"
+              exit 0
+            fi
+            echo "  Attempt $i: HTTP $STATUS — retrying in 5s..."
+            sleep 5
+          done
+          echo "✗ Staging health check failed after 30 attempts"
+          exit 1
+
+      - name: Run smoke tests against staging
+        run: |
+          # Basic endpoint checks
+          curl -sf https://staging.api.agrobridgefoundation.org/health | jq .
+          echo "✓ /health OK"
+
+          # Verify metrics requires auth
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            https://staging.api.agrobridgefoundation.org/metrics)
+          if [ "$STATUS" = "401" ] || [ "$STATUS" = "403" ]; then
+            echo "✓ /metrics correctly requires auth ($STATUS)"
+          else
+            echo "✗ /metrics returned unexpected $STATUS"
+            exit 1
+          fi
+
+  # ─── Deploy to Production ──────────────────────────────────────────
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [build, deploy-staging]
+    if: >
+      (github.event_name == 'workflow_run' && github.event.workflow_run.head_branch == 'main') ||
+      (github.event_name == 'workflow_dispatch' && inputs.environment == 'production')
+    environment:
+      name: production
+      url: https://api.agrobridgefoundation.org
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Setup Node and install dependencies
+        uses: ./.github/actions/setup-node-install
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Backup current production state
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        with:
+          host: ${{ secrets.PRODUCTION_SERVER_HOST }}
+          username: ${{ secrets.PRODUCTION_SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.PRODUCTION_SSH_PORT || 2222 }}
+          script: |
+            BACKUP_TAG="backup-$(date +%Y%m%d_%H%M%S)"
+            CURRENT_IMAGE=$(docker inspect --format='{{.Config.Image}}' agrobridge-backend 2>/dev/null || echo "none")
+            echo "$CURRENT_IMAGE" > /var/backups/backend/$BACKUP_TAG.txt
+            echo "✓ Production backup recorded: $CURRENT_IMAGE → $BACKUP_TAG"
+
+      - name: Run database migrations (production)
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        with:
+          host: ${{ secrets.PRODUCTION_SERVER_HOST }}
+          username: ${{ secrets.PRODUCTION_SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.PRODUCTION_SSH_PORT || 2222 }}
+          script: |
+            cd /var/www/agrobridge-backend
+            export DATABASE_URL="${{ secrets.PRODUCTION_DATABASE_URL }}"
+            npx prisma migrate deploy
+            echo "✓ Production migrations applied"
+
+      - name: Deploy container to production
+        id: deploy
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        with:
+          host: ${{ secrets.PRODUCTION_SERVER_HOST }}
+          username: ${{ secrets.PRODUCTION_SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.PRODUCTION_SSH_PORT || 2222 }}
+          script: |
+            IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build.outputs.image_tag }}"
+            docker pull "$IMAGE"
+
+            # Graceful rolling restart
+            docker stop agrobridge-backend --time 30 || true
+            docker rm agrobridge-backend || true
+            docker run -d \
+              --name agrobridge-backend \
+              --restart unless-stopped \
+              --env-file /var/www/agrobridge-backend/.env.production \
+              -p 3000:3000 \
+              "$IMAGE"
+            echo "✓ Production container deployed: $IMAGE"
+
+      - name: Health check (production)
+        run: |
+          echo "Waiting for production to be ready..."
+          for i in $(seq 1 30); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+              https://api.agrobridgefoundation.org/health || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "✓ Production health check passed (attempt $i)"
+              exit 0
+            fi
+            echo "  Attempt $i: HTTP $STATUS — retrying in 5s..."
+            sleep 5
+          done
+          echo "✗ Production health check failed after 30 attempts"
+          exit 1
+
+      - name: Verify critical endpoints
+        run: |
+          # Health
+          curl -sf https://api.agrobridgefoundation.org/health | jq .
+          echo "✓ /health OK"
+
+          # Auth endpoint responds (even if 405 for GET)
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            https://api.agrobridgefoundation.org/api/auth/login)
+          echo "✓ /api/auth/login responds: $STATUS"
+
+          # Donations endpoint responds
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST -H "Content-Type: application/json" \
+            -d '{}' \
+            https://api.agrobridgefoundation.org/api/donations/intent)
+          echo "✓ /api/donations/intent responds: $STATUS"
+
+      - name: Rollback on failure
+        if: failure() && steps.deploy.outcome == 'failure'
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        with:
+          host: ${{ secrets.PRODUCTION_SERVER_HOST }}
+          username: ${{ secrets.PRODUCTION_SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.PRODUCTION_SSH_PORT || 2222 }}
+          script: |
+            LATEST_BACKUP=$(ls -t /var/backups/backend/*.txt 2>/dev/null | head -1)
+            if [ -n "$LATEST_BACKUP" ]; then
+              PREVIOUS_IMAGE=$(cat "$LATEST_BACKUP")
+              echo "Rolling back to $PREVIOUS_IMAGE"
+              docker stop agrobridge-backend --time 30 || true
+              docker rm agrobridge-backend || true
+              docker run -d \
+                --name agrobridge-backend \
+                --restart unless-stopped \
+                --env-file /var/www/agrobridge-backend/.env.production \
+                -p 3000:3000 \
+                "$PREVIOUS_IMAGE"
+              echo "✓ Rollback completed"
+            else
+              echo "✗ No backup found for rollback"
+              exit 1
+            fi
+
+  # ─── Post-deploy notification ──────────────────────────────────────
+  notify:
+    name: Post-Deploy Notification
+    runs-on: ubuntu-latest
+    needs: [deploy-staging, deploy-production]
+    if: always()
+    steps:
+      - name: Summary
+        run: |
+          echo "## Backend Deploy Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Commit:** ${{ github.sha }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Staging:** ${{ needs.deploy-staging.result }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Production:** ${{ needs.deploy-production.result || 'skipped' }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Image Tag:** ${{ needs.build.outputs.image_tag || 'N/A' }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Triggered by:** ${{ github.event_name }}" >> "$GITHUB_STEP_SUMMARY"

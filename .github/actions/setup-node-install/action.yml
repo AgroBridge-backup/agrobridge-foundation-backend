@@ -1,0 +1,19 @@
+name: Setup Node and Install Dependencies
+description: Setup Node.js with npm cache and install dependencies via npm ci
+inputs:
+  node-version:
+    description: Node.js version to install
+    required: false
+    default: '20'
+runs:
+  using: composite
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: npm
+
+    - name: Install dependencies
+      shell: bash
+      run: npm ci

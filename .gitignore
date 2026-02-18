@@ -12,6 +12,7 @@ prisma/migrations
 
 # Backup/temp files
 *.bak
+*.bak*
 *.old
 *.tmp
 *.backup
@@ -19,6 +20,7 @@ prisma/migrations
 # Test output
 test-results/
 playwright-report/
+artifacts/
 
 # Logs
 *.log
