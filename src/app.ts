@@ -4,7 +4,7 @@ import helmet from '@fastify/helmet';
 import jwt from '@fastify/jwt';
 import rateLimit from '@fastify/rate-limit';
 import { trace, context } from '@opentelemetry/api';
-import Fastify, { type FastifyBaseLogger } from 'fastify';
+import Fastify, { type FastifyBaseLogger, type FastifyError } from 'fastify';
 import rawBody from 'fastify-raw-body';
 import swagger from '@fastify/swagger';
 import swaggerUI from '@fastify/swagger-ui';
@@ -19,6 +19,7 @@ import { AppError, Errors } from './errors/app-error.js';
 import { fail } from './http/response.js';
 import { requestContext } from './observability/request-context.js';
 import { semconv } from './observability/semconv.js';
+import { handleErrorWithObservability } from './middleware/error-observability.js';
 import { connectRedis, disconnectRedis } from './cache/redis-client.js';
 import { rateLimitMiddleware } from './rate-limiting/middleware.js';
 
@@ -120,6 +121,28 @@ export async function buildApp(opts: BuildAppOptions = {}) {
     },
   });
 
+  // JWT Secret Rotation: If a previous secret is configured, wrap jwtVerify
+  // to try the current secret first, then fall back to the previous one.
+  // This allows a zero-downtime rotation window where old tokens still work.
+  if (env.JWT_SECRET_PREVIOUS) {
+    const originalVerify = app.jwt.verify.bind(app.jwt);
+    (app.jwt as any).verify = (token: string, opts?: any) => {
+      try {
+        return originalVerify(token, opts);
+      } catch {
+        // Try previous secret for tokens issued before rotation
+        const jwtModule = require('jsonwebtoken');
+        return jwtModule.verify(token, env.JWT_SECRET_PREVIOUS, opts);
+      }
+    };
+  }
+
+  await app.register(rawBody, {
+    field: 'rawBody',
+    global: false,
+    runFirst: true,
+  });
+
   app.register(swagger, {
     openapi: {
       info: {
@@ -150,7 +173,7 @@ export async function buildApp(opts: BuildAppOptions = {}) {
     transformSpecificationClone: true,
   });
 
-  app.addHook('onRequest', async (req) => {
+  app.addHook('onRequest', async (req, reply) => {
     // Correlate logs with tracing.
     const span = trace.getSpan(context.active());
     const traceId = span?.spanContext().traceId;
@@ -164,6 +187,10 @@ export async function buildApp(opts: BuildAppOptions = {}) {
 
     // Provide request-scoped logger to lower layers.
     requestContext.run(req.log);
+
+    if (!reply.sent) {
+      await rateLimitMiddleware(req, reply);
+    }
   });
 
   app.addHook('onResponse', async (req, reply) => {
@@ -174,21 +201,46 @@ export async function buildApp(opts: BuildAppOptions = {}) {
     if (reply.statusCode >= 500) span.setStatus({ code: semconv.SpanStatusCode.ERROR });
   });
 
-  app.setErrorHandler((err, req, reply) => {
-    req.log.error({ err, requestId: req.id }, 'request failed');
+  // --- API Versioning & Correlation Headers ---
+  // Every response includes the API version and echoes the request ID.
+  // This enables contract-driven versioning: the frontend can send
+  // `Accept-Version: 2026-02-01` to pin a specific API contract.
+  const API_VERSION = '2026-02-17';
 
-    // Zod validation errors
-    if (err instanceof ZodError) {
-      const details = err.issues.map((i) => ({ path: i.path, message: i.message }));
-      const e = Errors.validation(details);
-      return reply.status(e.statusCode).send(fail({ code: e.code, message: e.message, details }));
+  app.addHook('onSend', async (req, reply) => {
+    reply.header('X-API-Version', API_VERSION);
+
+    // Echo request ID for end-to-end correlation
+    const requestId = req.id;
+    if (requestId) {
+      reply.header('X-Request-Id', requestId);
     }
 
-    // Our typed errors
+    // Record which version the client requested (for future negotiation)
+    const acceptVersion = req.headers['accept-version'];
+    if (acceptVersion) {
+      const span = trace.getSpan(context.active());
+      span?.setAttribute('api.client_version', acceptVersion as string);
+    }
+  });
+
+  app.setErrorHandler((err, req, reply) => {
+    // Use structured error observability for classification and metrics
+    const classified = handleErrorWithObservability(err as Error | FastifyError, req, reply);
+
+    // Zod validation errors - return validation details
+    if (err instanceof ZodError) {
+      const details = err.issues.map((i) => ({ path: i.path, message: i.message }));
+      return reply
+        .status(classified.httpStatus)
+        .send(fail({ code: classified.code, message: classified.message, details }));
+    }
+
+    // Our typed errors - return with full details
     if (err instanceof AppError) {
       return reply
-        .status(err.statusCode)
-        .send(fail({ code: err.code, message: err.message, details: err.details }));
+        .status(classified.httpStatus)
+        .send(fail({ code: classified.code, message: classified.message, details: err.details }));
     }
 
     // Fastify schema validation (AJV) lands here with statusCode
@@ -199,12 +251,14 @@ export async function buildApp(opts: BuildAppOptions = {}) {
 
     if (statusCode >= 400 && statusCode < 500) {
       return reply
-        .status(statusCode)
-        .send(fail({ code: 'VALIDATION_ERROR', message: 'Invalid input' }));
+        .status(classified.httpStatus)
+        .send(fail({ code: classified.code, message: classified.message }));
     }
 
-    const e = Errors.internal();
-    return reply.status(e.statusCode).send(fail({ code: e.code, message: e.message }));
+    // Return classified error response
+    return reply
+      .status(classified.httpStatus)
+      .send(fail({ code: classified.code, message: classified.message }));
   });
 
   registerRoutes(app);

@@ -11,5 +11,9 @@ export function encodeCursor(cursor: { createdAt: Date; id: string }): string {
 export function decodeCursor(cursor: string): { createdAt: Date; id: string } {
   const raw = Buffer.from(cursor, 'base64url').toString('utf8');
   const parsed = JSON.parse(raw) as Cursor;
-  return { createdAt: new Date(parsed.createdAt), id: parsed.id };
+  const date = new Date(parsed.createdAt);
+  if (isNaN(date.getTime())) {
+    throw new Error('Invalid cursor: bad date format');
+  }
+  return { createdAt: date, id: parsed.id };
 }

@@ -1,6 +1,7 @@
 import { execSync } from 'node:child_process';
-import { PrismaClient } from '@prisma/client';
+import type { PrismaClient } from '@prisma/client';
 import { PostgreSqlContainer } from '@testcontainers/postgresql';
+import { createPrismaClient } from '../../src/db/prisma.js';
 
 let container: PostgreSqlContainer | undefined;
 let prisma: PrismaClient | undefined;
@@ -23,12 +24,12 @@ export async function startTestDb() {
   process.env.DATABASE_URL = container.getConnectionUri();
 
   // Keep tests migration-independent: apply schema directly.
-  execSync('npx prisma db push --skip-generate', {
+  execSync('npx prisma db push', {
     stdio: 'inherit',
     env: process.env,
   });
 
-  prisma = new PrismaClient();
+  prisma = createPrismaClient();
   await prisma.$connect();
 
   return { container, prisma };

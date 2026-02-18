@@ -6,6 +6,8 @@ import { InMemoryRateLimitStore } from '../../../src/rate-limiting/in-memory-rat
 import { TieredRateLimiter } from '../../../src/rate-limiting/tiered-rate-limiter.js';
 import { RateLimitTier } from '../../../src/rate-limiting/tier-config.js';
 
+const describeTier3 = process.env.TEST_TIER3 === '1' ? describe : describe.skip;
+
 describe('Redis Rate Limiting Integration', () => {
   let redisContainer: StartedTestContainer;
   let redisClient: RedisClientType;
@@ -118,7 +120,7 @@ describe('Redis Rate Limiting Integration', () => {
     });
   });
 
-  describe('performance benchmarks', () => {
+  describeTier3('performance benchmarks', () => {
     it('should meet P99 latency < 5ms target', async () => {
       const fallback = new InMemoryRateLimitStore();
       const limiter = new TieredRateLimiter(new RedisRateLimitStore(redisClient, fallback));

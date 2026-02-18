@@ -1,0 +1,54 @@
+name: Weekly Reliability Scorecard
+
+on:
+  schedule:
+    - cron: '0 8 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reliability-scorecard:
+    name: reliability-scorecard
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ARTIFACT_SENSITIVITY: internal
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Setup Node and install dependencies
+        uses: ./.github/actions/setup-node-install
+        with:
+          node-version: '20'
+
+      - name: Generate weekly reliability scorecard
+        run: |
+          mkdir -p artifacts/reliability docs/reports
+          set -o pipefail
+          node ./scripts/reliability/generate-scorecard.mjs 2>&1 | tee artifacts/reliability/scorecard.log
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish scorecard summary
+        if: always()
+        run: |
+          latest_report=$(ls -1t docs/reports/reliability-scorecard-*.md 2>/dev/null | head -n 1 || true)
+          if [ -n "$latest_report" ] && [ -f "$latest_report" ]; then
+            cat "$latest_report" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No scorecard report generated." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload reliability scorecard artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: weekly-reliability-scorecard-artifacts
+          path: |
+            artifacts/reliability
+            docs/reports/reliability-scorecard-*.md
+          retention-days: 30
+          if-no-files-found: ignore

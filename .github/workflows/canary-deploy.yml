@@ -1,0 +1,121 @@
+name: Canary Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      error_budget_override:
+        description: 'Set true only for approved emergency override'
+        type: boolean
+        default: false
+        required: true
+      override_reason:
+        description: 'Required if override is true'
+        type: string
+        required: false
+  push:
+    tags:
+      - 'release-*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: canary-deploy-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  canary-deploy:
+    name: canary-deploy
+    runs-on: ubuntu-latest
+    environment:
+      name: canary
+    timeout-minutes: 60
+    env:
+      CANARY_BASE_URL: ${{ secrets.CANARY_BASE_URL }}
+      CANARY_DEPLOY_COMMAND: ${{ secrets.CANARY_DEPLOY_COMMAND }}
+      CANARY_ROLLBACK_COMMAND: ${{ secrets.CANARY_ROLLBACK_COMMAND }}
+      PROMETHEUS_BASE_URL: ${{ secrets.PROMETHEUS_BASE_URL }}
+      PROMETHEUS_BEARER_TOKEN: ${{ secrets.PROMETHEUS_BEARER_TOKEN }}
+      ERROR_BUDGET_OVERRIDE: ${{ github.event_name == 'workflow_dispatch' && inputs.error_budget_override && 'approved' || '' }}
+      ERROR_BUDGET_OVERRIDE_REASON: ${{ github.event_name == 'workflow_dispatch' && inputs.override_reason || '' }}
+      ARTIFACT_SENSITIVITY: restricted-internal
+      RELEASE_ENVIRONMENT: canary
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Setup Node and install dependencies
+        uses: ./.github/actions/setup-node-install
+        with:
+          node-version: '20'
+
+      - name: Generate Prisma client
+        run: npm run prisma:generate
+
+      - name: Build release artifact
+        run: npm run build
+
+      - name: Enforce error budget policy
+        run: |
+          mkdir -p artifacts/reliability
+          set -o pipefail
+          node ./scripts/reliability/check-error-budget.mjs 2>&1 | tee artifacts/reliability/error-budget-check.log
+
+      - name: Deploy canary slice
+        id: deploy_canary
+        run: |
+          mkdir -p artifacts/canary
+          set -o pipefail
+          ./scripts/release/deploy-canary.sh 2>&1 | tee artifacts/canary/deploy-canary.log
+
+      - name: Resolve canary release identifier
+        id: canary_release
+        if: always()
+        run: |
+          RELEASE_ID=""
+          if [ -f artifacts/canary/deploy-canary-metadata.json ]; then
+            RELEASE_ID="$(node -e "const fs=require('fs');try{const parsed=JSON.parse(fs.readFileSync('artifacts/canary/deploy-canary-metadata.json','utf8'));process.stdout.write(String(parsed.canaryReleaseId ?? ''));}catch{process.stdout.write('');}")"
+          fi
+          printf 'release_id=%s\n' "$RELEASE_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Monitor canary SLOs
+        id: monitor_canary
+        run: |
+          mkdir -p artifacts/canary
+          set -o pipefail
+          node ./scripts/release/monitor-slo.mjs 2>&1 | tee artifacts/canary/monitor-slo.log
+        env:
+          CANARY_RELEASE_ID: ${{ steps.canary_release.outputs.release_id }}
+
+      - name: Roll back canary on SLO breach
+        if: always() && (steps.deploy_canary.outcome == 'failure' || steps.monitor_canary.outcome == 'failure')
+        run: |
+          mkdir -p artifacts/canary
+          set -o pipefail
+          ./scripts/release/rollback-canary.sh 2>&1 | tee artifacts/canary/rollback-canary.log
+
+      - name: Upload canary artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: canary-deploy-artifacts
+          path: |
+            artifacts/canary
+            artifacts/reliability
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: Publish summary
+        if: always()
+        run: |
+          echo "## Canary Deploy" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f artifacts/reliability/error-budget-check.json ]; then
+            echo "- error budget check: recorded" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- error budget check: missing" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -f artifacts/canary/slo-monitor.json ]; then
+            echo "- SLO monitor: recorded" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- SLO monitor: missing" >> "$GITHUB_STEP_SUMMARY"
+          fi

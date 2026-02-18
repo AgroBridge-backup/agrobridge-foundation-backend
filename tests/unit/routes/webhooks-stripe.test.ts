@@ -7,7 +7,7 @@ import { setTestEnv } from '../../helpers/env';
 describe('Stripe webhook route', () => {
   it('returns 400 if missing stripe-signature', async () => {
     setTestEnv();
-    const app = buildApp({ logger: false });
+    const app = await buildApp({ logger: false });
 
     const res = await app.inject({
       method: 'POST',

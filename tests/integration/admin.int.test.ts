@@ -9,7 +9,7 @@ import { startTestDb, stopTestDb } from './test-db.js';
 
 let prisma: PrismaClient;
 
-describe('Integration admin endpoints', { skip: !process.env.DOCKER_HOST && !process.env.TESTCONTAINERS_HOST_OVERRIDE }, () => {
+describe('Integration admin endpoints', () => {
   beforeAll(async () => {
     setTestEnv();
     const started = await startTestDb();
@@ -30,38 +30,56 @@ describe('Integration admin endpoints', { skip: !process.env.DOCKER_HOST && !pro
   });
 
   it('GET /api/admin/donations paginates and filters', async () => {
-    const app = buildApp({ logger: false });
-    const token = await app.jwt.sign({ sub: 'admin1', email: 'admin@x.com', role: 'ADMIN' }, { expiresIn: '24h' });
-    const cookie = await signAdminCookie(app, token);
+    const app = await buildApp({ logger: false });
+    await app.ready();
 
-    const res = await app.inject({
-      method: 'GET',
-      url: '/api/admin/donations?page=1&pageSize=2&status=SUCCEEDED&sort=createdAt:desc',
-      headers: { cookie },
-    });
+    try {
+      const token = await app.jwt.sign(
+        { sub: 'admin1', email: 'admin@x.com', role: 'ADMIN' },
+        { expiresIn: '24h' },
+      );
+      const cookie = await signAdminCookie(app, token);
 
-    expect(res.statusCode).toBe(200);
-    const body = res.json();
-    expect(body.ok).toBe(true);
-    expect(body.data.items.length).toBe(2);
-    expect(body.data.meta).toMatchObject({ page: 1, pageSize: 2, total: 2, totalPages: 1 });
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/admin/donations?page=1&pageSize=2&status=SUCCEEDED&sort=createdAt:desc',
+        headers: { cookie },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.ok).toBe(true);
+      expect(body.data.items.length).toBe(2);
+      expect(body.data.meta).toMatchObject({ page: 1, pageSize: 2, total: 2, totalPages: 1 });
+    } finally {
+      await app.close();
+    }
   });
 
   it('GET /api/admin/dashboard computes aggregates', async () => {
-    const app = buildApp({ logger: false });
-    const token = await app.jwt.sign({ sub: 'admin1', email: 'admin@x.com', role: 'ADMIN' }, { expiresIn: '24h' });
-    const cookie = await signAdminCookie(app, token);
+    const app = await buildApp({ logger: false });
+    await app.ready();
 
-    const res = await app.inject({ method: 'GET', url: '/api/admin/dashboard', headers: { cookie } });
+    try {
+      const token = await app.jwt.sign(
+        { sub: 'admin1', email: 'admin@x.com', role: 'ADMIN' },
+        { expiresIn: '24h' },
+      );
+      const cookie = await signAdminCookie(app, token);
 
-    expect(res.statusCode).toBe(200);
-    const body = res.json();
-    expect(body.ok).toBe(true);
-    // totalRaised sums succeeded amounts only
-    expect(body.data.totalRaised).toBe(300);
-    expect(body.data.donationCount).toBe(3);
-    // distinct donorEmail among all donations where donorEmail not null
-    expect(body.data.donorCount).toBe(2);
-    expect(body.data.lastDonationAt).not.toBeNull();
+      const res = await app.inject({ method: 'GET', url: '/api/admin/dashboard', headers: { cookie } });
+
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.ok).toBe(true);
+      // totalRaised sums succeeded amounts only
+      expect(body.data.totalRaised).toBe(300);
+      expect(body.data.donationCount).toBe(3);
+      // distinct donorEmail among all donations where donorEmail not null
+      expect(body.data.donorCount).toBe(2);
+      expect(body.data.lastDonationAt).not.toBeNull();
+    } finally {
+      await app.close();
+    }
   });
 });

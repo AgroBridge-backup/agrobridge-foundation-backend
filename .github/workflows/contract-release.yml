@@ -1,0 +1,273 @@
+name: Contract Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'contracts/**'
+      - 'src/api/routes/**'
+      - 'src/api/schemas/**'
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v1.2.0)'
+        required: false
+        type: string
+      notify_frontend:
+        description: 'Notify frontend repository'
+        required: false
+        type: boolean
+        default: true
+
+env:
+  FRONTEND_REPO: AgroBridge-backup/agrobridge-foundation-web
+
+permissions:
+  contents: read
+
+jobs:
+  validate-contracts:
+    name: Validate Contract Artifacts
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      commit_sha: ${{ github.sha }}
+      has_changes: ${{ steps.changes.outputs.has_changes }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Export OpenAPI snapshot
+        run: npm run contracts:openapi:export
+
+      - name: Check for contract changes
+        id: changes
+        run: |
+          # Check if OpenAPI snapshot changed
+          if git diff --quiet contracts/openapi/openapi.v1.snapshot.json; then
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          else
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "::warning::OpenAPI snapshot has uncommitted changes!"
+          fi
+
+      - name: Run contract tests
+        run: npm run test:contracts
+
+      - name: Generate version info
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            echo "version=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
+          elif [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            # Extract version from package.json
+            VERSION=$(jq -r '.version' package.json)
+            echo "version=v$VERSION" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Calculate artifact hashes
+        id: hashes
+        run: |
+          OPENAPI_HASH=$(sha256sum contracts/openapi/openapi.v1.snapshot.json | cut -d' ' -f1)
+          DONATION_HASH=$(sha256sum contracts/schemas/post-api-donations-intent.response.v1.json | cut -d' ' -f1)
+          CONTACT_HASH=$(sha256sum contracts/schemas/post-api-contacts.response.v1.json | cut -d' ' -f1)
+          
+          echo "openapi_hash=$OPENAPI_HASH" >> $GITHUB_OUTPUT
+          echo "donation_hash=$DONATION_HASH" >> $GITHUB_OUTPUT
+          echo "contact_hash=$CONTACT_HASH" >> $GITHUB_OUTPUT
+
+      - name: Upload contract artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: contract-artifacts
+          path: |
+            contracts/openapi/openapi.v1.snapshot.json
+            contracts/schemas/*.json
+          retention-days: 90
+
+      - name: Create contract release metadata
+        run: |
+          mkdir -p artifacts/contracts
+          cat > artifacts/contracts/release-metadata.json << 'EOF'
+          {
+            "version": "${{ steps.version.outputs.version }}",
+            "commitSha": "${{ github.sha }}",
+            "commitMessage": "${{ github.event.head_commit.message }}",
+            "commitAuthor": "${{ github.event.head_commit.author.name }}",
+            "commitDate": "${{ github.event.head_commit.timestamp }}",
+            "artifacts": {
+              "openapi": {
+                "path": "contracts/openapi/openapi.v1.snapshot.json",
+                "hash": "${{ steps.hashes.outputs.openapi_hash }}"
+              },
+              "donationResponse": {
+                "path": "contracts/schemas/post-api-donations-intent.response.v1.json",
+                "hash": "${{ steps.hashes.outputs.donation_hash }}"
+              },
+              "contactResponse": {
+                "path": "contracts/schemas/post-api-contacts.response.v1.json",
+                "hash": "${{ steps.hashes.outputs.contact_hash }}"
+              }
+            }
+          }
+          EOF
+
+      - name: Upload release metadata
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: contract-release-metadata
+          path: artifacts/contracts/release-metadata.json
+          retention-days: 90
+
+  breaking-change-analysis:
+    name: Breaking Change Analysis
+    runs-on: ubuntu-latest
+    needs: validate-contracts
+    if: github.event_name == 'push' || github.event_name == 'release'
+    steps:
+      - name: Checkout current
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Get previous release
+        id: previous
+        run: |
+          # Get the previous release tag
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -n "$PREV_TAG" ]; then
+            echo "tag=$PREV_TAG" >> $GITHUB_OUTPUT
+            echo "has_previous=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_previous=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Checkout previous contracts
+        if: steps.previous.outputs.has_previous == 'true'
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ steps.previous.outputs.tag }}
+          path: previous-contracts
+
+      - name: Compare OpenAPI specs
+        if: steps.previous.outputs.has_previous == 'true'
+        id: compare
+        run: |
+          # Download breaking change detector
+          curl -sL https://raw.githubusercontent.com/${{ env.FRONTEND_REPO }}/main/scripts/contracts/breaking-change-detector.mjs -o breaking-change-detector.mjs || true
+          
+          if [ -f breaking-change-detector.mjs ]; then
+            node breaking-change-detector.mjs \
+              --current-lock previous-contracts/contracts/openapi/openapi.v1.snapshot.json \
+              --new-openapi contracts/openapi/openapi.v1.snapshot.json \
+              --output artifacts/breaking-changes.json || true
+            
+            if [ -f artifacts/breaking-changes.json ]; then
+              CHANGES=$(jq '.breakingChanges | length' artifacts/breaking-changes.json)
+              echo "breaking_changes=$CHANGES" >> $GITHUB_OUTPUT
+              
+              if [ "$CHANGES" -gt 0 ]; then
+                echo "::error::Breaking changes detected!"
+                jq '.breakingChanges[]' artifacts/breaking-changes.json
+              fi
+            fi
+          fi
+
+      - name: Upload breaking change report
+        if: steps.previous.outputs.has_previous == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: breaking-change-report
+          path: artifacts/breaking-changes.json
+          retention-days: 90
+          if-no-files-found: ignore
+
+  notify-frontend:
+    name: Notify Frontend Repository
+    runs-on: ubuntu-latest
+    needs: [validate-contracts, breaking-change-analysis]
+    if: |
+      always() && 
+      needs.validate-contracts.result == 'success' &&
+      (github.event.inputs.notify_frontend != 'false')
+    steps:
+      - name: Trigger frontend contract sync
+        run: |
+          curl -X POST \
+            -H "Authorization: token ${{ secrets.FRONTEND_REPO_TOKEN || secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/${{ env.FRONTEND_REPO }}/dispatches \
+            -d '{
+              "event_type": "backend-release",
+              "client_payload": {
+                "commit_sha": "${{ github.sha }}",
+                "version": "${{ needs.validate-contracts.outputs.version }}",
+                "repository": "${{ github.repository }}",
+                "has_contract_changes": ${{ needs.validate-contracts.outputs.has_changes }},
+                "breaking_changes": ${{ needs.breaking-change-analysis.outputs.breaking_changes || 0 }}
+              }
+            }'
+
+      - name: Create deployment notification
+        run: |
+          echo "Frontend contract sync triggered"
+          echo "Backend version: ${{ needs.validate-contracts.outputs.version }}"
+          echo "Backend commit: ${{ github.sha }}"
+
+  update-release-notes:
+    name: Update Release Notes
+    runs-on: ubuntu-latest
+    needs: [validate-contracts, breaking-change-analysis]
+    if: github.event_name == 'release'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Download artifacts
+        uses: actions/download-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: contract-release-metadata
+          path: artifacts/
+
+      - name: Update release notes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BREAKING_COUNT=${{ needs.breaking-change-analysis.outputs.breaking_changes || 0 }}
+          
+          NOTES="## Contract Artifacts
+
+          This release includes the following contract artifacts:
+          
+          | Artifact | Path |
+          |----------|------|
+          | OpenAPI Spec | \`contracts/openapi/openapi.v1.snapshot.json\` |
+          | Donation Response Schema | \`contracts/schemas/post-api-donations-intent.response.v1.json\` |
+          | Contact Response Schema | \`contracts/schemas/post-api-contacts.response.v1.json\` |
+          
+          ## Contract Hashes
+          
+          $(jq -r '.artifacts | to_entries[] | "- \(.key): \`\(.value.hash)\`"' artifacts/contracts/release-metadata.json)
+          
+          ## Breaking Changes
+          
+          $(if [ \"$BREAKING_COUNT\" -gt 0 ]; then echo \":warning: **$BREAKING_COUNT breaking changes detected** - Review the breaking change report for details.\"; else echo \":white_check_mark: No breaking changes detected.\"; fi)
+          
+          ## Frontend Integration
+          
+          The frontend repository has been automatically notified of this release.
+          A contract sync PR will be created to update the frontend lock file."
+          
+          gh release edit ${{ github.event.release.tag_name }} --notes "$NOTES"

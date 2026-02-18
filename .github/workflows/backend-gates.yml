@@ -1,0 +1,456 @@
+name: Backend Gates
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-gates-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ARTIFACT_SENSITIVITY: internal
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Setup Node and install dependencies
+        uses: ./.github/actions/setup-node-install
+        with:
+          node-version: '20'
+
+      - name: Run lint gate
+        run: node ./scripts/ci/run-gate.mjs lint "npm run lint" "artifacts/lint/lint.log"
+
+      - name: Upload lint artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: lint-failure-artifacts
+          path: |
+            artifacts/lint
+            artifacts/gates/lint.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+  security-audit:
+    name: security-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Setup Node and install dependencies
+        uses: ./.github/actions/setup-node-install
+        with:
+          node-version: '20'
+
+      - name: Run npm audit
+        run: |
+          mkdir -p artifacts/security
+          npm audit --audit-level=moderate --omit=dev 2>&1 | tee artifacts/security/npm-audit.log || true
+
+      - name: Fail on high/critical vulnerabilities
+        run: npm audit --audit-level=high --omit=dev
+
+      - name: Upload security artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: security-audit-artifacts
+          path: artifacts/security
+          retention-days: 14
+          if-no-files-found: ignore
+
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Setup Node and install dependencies
+        uses: ./.github/actions/setup-node-install
+        with:
+          node-version: '20'
+
+      - name: Run build gate
+        run: node ./scripts/ci/run-gate.mjs build "npm run build" "artifacts/build/build.log"
+
+      - name: Upload build artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: build-failure-artifacts
+          path: |
+            artifacts/build
+            artifacts/gates/build.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+  unit:
+    name: unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Setup Node and install dependencies
+        uses: ./.github/actions/setup-node-install
+        with:
+          node-version: '20'
+
+      - name: Run unit gate
+        run: node ./scripts/ci/run-gate.mjs unit "npm run test:unit" "artifacts/unit/unit.log"
+
+      - name: Upload unit artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: unit-failure-artifacts
+          path: |
+            artifacts/unit
+            artifacts/gates/unit.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+  contracts:
+    name: contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Setup Node and install dependencies
+        uses: ./.github/actions/setup-node-install
+        with:
+          node-version: '20'
+
+      - name: Contract preflight
+        run: node ./scripts/contracts/preflight.mjs
+
+      - name: Run contracts gate
+        run: node ./scripts/ci/run-gate.mjs contracts "npm run contracts:check" "artifacts/contracts/contracts.log"
+
+      - name: Upload contracts artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: contracts-failure-artifacts
+          path: |
+            artifacts/contracts
+            artifacts/gates/contracts.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+  integration:
+    name: integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DOCKER_HOST: unix:///var/run/docker.sock
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: agrobridge
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d agrobridge"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Setup Node and install dependencies
+        uses: ./.github/actions/setup-node-install
+        with:
+          node-version: '20'
+
+      - name: Run integration gate
+        run: node ./scripts/ci/run-gate.mjs integration "npm run test:integration" "artifacts/integration/integration.log"
+
+      - name: Upload integration artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: integration-failure-artifacts
+          path: |
+            artifacts/integration
+            artifacts/gates/integration.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+  e2e:
+    name: e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: agrobridge
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d agrobridge"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/agrobridge
+      JWT_SECRET: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+      COOKIE_SECRET: yyyyyyyyyyyyyyyy
+      STRIPE_SECRET_KEY: sk_test_x
+      STRIPE_WEBHOOK_SECRET: whsec_x
+      STRIPE_API_VERSION: 2024-06-20
+      CORS_ORIGIN: http://localhost:3000
+      REDIS_URL: redis://127.0.0.1:6379
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Setup Node and install dependencies
+        uses: ./.github/actions/setup-node-install
+        with:
+          node-version: '20'
+
+      - name: Prepare database schema
+        run: npx prisma db push
+
+      - name: Run e2e gate
+        run: node ./scripts/ci/run-gate.mjs e2e "npm run test:e2e" "artifacts/e2e/e2e.log"
+
+      - name: Upload e2e artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: e2e-failure-artifacts
+          path: |
+            artifacts/e2e
+            artifacts/gates/e2e.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+  frontend-compat:
+    name: frontend-compat
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [contracts]
+    steps:
+      - name: Checkout backend
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Setup Node and install dependencies
+        uses: ./.github/actions/setup-node-install
+        with:
+          node-version: '20'
+
+      - name: Contracts preflight
+        run: node ./scripts/contracts/preflight.mjs
+
+      - name: Export backend OpenAPI snapshot
+        run: npm run contracts:openapi:export
+
+      - name: Checkout frontend repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: AgroBridge-backup/agrobridge-foundation-web
+          ref: main
+          path: frontend
+          token: ${{ secrets.FRONTEND_REPO_TOKEN || github.token }}
+
+      - name: Frontend checker preflight
+        run: |
+          test -f frontend/scripts/contracts/check-backend-contract.mjs
+          test -f contracts/openapi/openapi.v1.snapshot.json
+          test -f contracts/schemas/post-api-donations-intent.response.v1.json
+          test -f contracts/schemas/post-api-contacts.response.v1.json
+
+      - name: Run frontend compatibility gate
+        run: node ./scripts/ci/run-gate.mjs frontend-compat "node frontend/scripts/contracts/check-backend-contract.mjs" "artifacts/frontend-compat/frontend-compat.log"
+        env:
+          BACKEND_OPENAPI_FILE: contracts/openapi/openapi.v1.snapshot.json
+          BACKEND_DONATION_SCHEMA_FILE: contracts/schemas/post-api-donations-intent.response.v1.json
+          BACKEND_CONTACT_SCHEMA_FILE: contracts/schemas/post-api-contacts.response.v1.json
+          CONTRACT_ARTIFACT_DIR: artifacts/frontend-compat
+
+      - name: Upload frontend compatibility artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: frontend-compat-artifacts
+          path: |
+            artifacts/frontend-compat
+            artifacts/gates/frontend-compat.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+  release-report:
+    name: release-report
+    runs-on: ubuntu-latest
+    needs: [lint, build, unit, contracts, integration, e2e, frontend-compat, security-audit]
+    if: always()
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Setup Node and install dependencies
+        uses: ./.github/actions/setup-node-install
+        with:
+          node-version: '20'
+
+      - name: Release report preflight
+        run: |
+          test -f scripts/generate-release-report.mjs
+          test -f scripts/governance/export-branch-protection.mjs
+          test -f package.json
+
+      - name: Export branch protection evidence
+        env:
+          GOVERNANCE_AUDIT_TOKEN: ${{ secrets.GOVERNANCE_AUDIT_TOKEN }}
+        run: node ./scripts/ci/run-gate.mjs branch-protection "node ./scripts/governance/export-branch-protection.mjs" "artifacts/governance/branch-protection.log"
+
+      - name: Generate release report gate
+        env:
+          GATE_LINT: ${{ needs.lint.result }}
+          GATE_BUILD: ${{ needs.build.result }}
+          GATE_UNIT: ${{ needs.unit.result }}
+          GATE_CONTRACTS: ${{ needs.contracts.result }}
+          GATE_INTEGRATION: ${{ needs.integration.result }}
+          GATE_E2E: ${{ needs.e2e.result }}
+          GATE_FRONTEND_COMPAT: ${{ needs.frontend-compat.result }}
+          GATE_SECURITY_AUDIT: ${{ needs.security-audit.result }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REF: ${{ github.ref }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: node ./scripts/ci/run-gate.mjs release-report "npm run report:release" "artifacts/release/release-report.log"
+
+      - name: Publish summary
+        if: always()
+        run: |
+          if [ -f artifacts/release/release-readiness.md ]; then
+            cat artifacts/release/release-readiness.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Release readiness report missing." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload release report artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-readiness-artifacts
+          path: |
+            artifacts/release
+            artifacts/governance
+            artifacts/gates/release-report.json
+            artifacts/gates/branch-protection.json
+          retention-days: 30
+          if-no-files-found: ignore
+
+  nightly-tier3:
+    name: nightly-tier3
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: agrobridge
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d agrobridge"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/agrobridge
+      JWT_SECRET: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+      COOKIE_SECRET: yyyyyyyyyyyyyyyy
+      STRIPE_SECRET_KEY: sk_test_x
+      STRIPE_WEBHOOK_SECRET: whsec_x
+      STRIPE_API_VERSION: 2024-06-20
+      CORS_ORIGIN: http://localhost:3000
+      REDIS_URL: redis://127.0.0.1:6379
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Setup Node and install dependencies
+        uses: ./.github/actions/setup-node-install
+        with:
+          node-version: '20'
+
+      - name: Run tier3 nightly gate
+        run: node ./scripts/ci/run-gate.mjs nightly-tier3 "npm run test:tier3:nightly" "artifacts/tier3/tier3-nightly.log"
+
+      - name: Upload tier3 artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: tier3-nightly-artifacts
+          path: |
+            artifacts/tier3
+            artifacts/gates/nightly-tier3.json
+          retention-days: 14
+          if-no-files-found: ignore

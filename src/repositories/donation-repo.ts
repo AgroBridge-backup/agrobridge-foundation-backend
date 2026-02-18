@@ -15,7 +15,7 @@ export type DonationListSort = {
 };
 
 export class DonationRepository {
-  constructor(private readonly prisma: PrismaClient) {}
+  constructor(private readonly prisma: PrismaClient) { }
 
   createPending(input: {
     amount: number;
@@ -72,6 +72,34 @@ export class DonationRepository {
         this.prisma.donation.updateMany({
           where: { stripeSessionId },
           data: { status },
+        }),
+    });
+  }
+
+  /**
+   * Atomic transaction: update donation status AND mark webhook event as processed.
+   * This prevents inconsistent state where one operation succeeds but the other fails
+   * (e.g., donation marked SUCCEEDED but webhook still unprocessed → re-processing on retry).
+   */
+  transactionalStatusUpdate(
+    stripeSessionId: string,
+    status: DonationStatus,
+    webhookEventId: string,
+  ) {
+    return withDbSpan({
+      name: 'db.donation.transactional_status_update',
+      model: 'Donation',
+      operation: 'transaction',
+      fn: async () =>
+        this.prisma.$transaction(async (tx) => {
+          await tx.donation.updateMany({
+            where: { stripeSessionId },
+            data: { status },
+          });
+          await tx.webhookEvent.update({
+            where: { id: webhookEventId },
+            data: { processed: true },
+          });
         }),
     });
   }

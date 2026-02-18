@@ -9,3 +9,18 @@ coverage
 prisma/dev.db
 prisma/migrations
 *.tgz
+
+# Backup/temp files
+*.bak
+*.bak*
+*.old
+*.tmp
+*.backup
+
+# Test output
+test-results/
+playwright-report/
+artifacts/
+
+# Logs
+*.log

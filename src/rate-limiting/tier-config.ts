@@ -9,6 +9,10 @@ export enum RateLimitTier {
   VIP_ADMIN = 'vip_admin',
   API_KEY = 'api_key',
   DDOS = 'ddos',
+  /** Money-touching endpoints: donations, payment intents */
+  FINANCIAL = 'financial',
+  /** Contact form: public, low volume */
+  CONTACT = 'contact',
 }
 
 export interface TierConfig {
@@ -62,16 +66,30 @@ export const TIER_CONFIGS: Record<RateLimitTier, TierConfig> = {
     maxRequests: 10,
     timeWindow: '1 minute',
   },
+  [RateLimitTier.FINANCIAL]: {
+    tier: RateLimitTier.FINANCIAL,
+    maxRequests: 10,
+    timeWindow: '1 minute',
+  },
+  [RateLimitTier.CONTACT]: {
+    tier: RateLimitTier.CONTACT,
+    maxRequests: 5,
+    timeWindow: '1 minute',
+  },
 };
 
 export const ROUTE_TIERS: Record<string, RateLimitTier> = {
   '/api/health': RateLimitTier.PUBLIC,
-  '/api/donations/intent': RateLimitTier.PUBLIC,
-  '/api/contacts': RateLimitTier.PUBLIC,
+  '/api/donations/intent': RateLimitTier.FINANCIAL,
+  '/api/contacts': RateLimitTier.CONTACT,
   '/api/auth/login': RateLimitTier.STRICT,
+  '/api/auth/refresh': RateLimitTier.ADMIN,
+  '/api/auth/logout': RateLimitTier.PUBLIC,
   '/api/admin/donations': RateLimitTier.ADMIN,
   '/api/admin/dashboard': RateLimitTier.ADMIN,
   '/api/webhooks/stripe': RateLimitTier.WEBHOOK,
+  '/api/campaigns': RateLimitTier.PUBLIC,
+  '/api/feature-flags': RateLimitTier.PUBLIC,
 };
 
 export function getTierForRoute(route: string): RateLimitTier {

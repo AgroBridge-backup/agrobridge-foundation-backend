@@ -211,9 +211,11 @@ app.register(rateLimit, { max: 200, timeWindow: '1 minute', global: env.NODE_ENV
 Stripe webhook policy:
 
 ```ts
+// NOTE: Per-route rateLimit was planned but not implemented.
+// Actual route only has config: { rawBody: true }.
+// Rate limiting is handled by TieredRateLimiter (WEBHOOK tier: max=500/min).
 app.post('/webhooks/stripe', {
   config: { rawBody: true },
-  rateLimit: { max: 100, timeWindow: '1 minute', skipOnError: true },
 }, handler);
 ```
 
@@ -331,8 +333,14 @@ new PrismaClient({ log: ... });
 After:
 
 ```ts
-const pooledUrl = `${baseUrl}${hasQuery ? '&' : '?'}connection_limit=20&pool_timeout=20`;
-new PrismaClient({ datasources: { db: { url: pooledUrl } }, log: ... });
+const poolMax = parseInt(process.env.DB_POOL_MAX || '20', 10);
+const poolIdleTimeout = parseInt(process.env.DB_POOL_IDLE_TIMEOUT || '20000', 10);
+
+const adapter = new PrismaPg({
+  connectionString: process.env.DATABASE_URL,
+  max: poolMax,
+  idleTimeoutMillis: poolIdleTimeout,
+});
 ```
 
 Why:
@@ -341,8 +349,8 @@ Why:
 
 Operational impact:
 
-- Connection pool size is 20 with a 20s timeout.
-- If DB limits are lower, reduce the pool size (code change required currently).
+- Default pool size is 20 with a 20s idle timeout. Configurable via `DB_POOL_MAX` and `DB_POOL_IDLE_TIMEOUT` env vars.
+- If DB limits are lower, reduce the pool size via `DB_POOL_MAX` (no code change required).
 
 Risks:
 

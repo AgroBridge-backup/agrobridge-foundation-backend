@@ -12,6 +12,10 @@ export interface RateLimitHealthStatus {
   timestamp: string;
 }
 
+export interface RegisterHealthCheckOptions {
+  requireDeepAuth?: (request: any) => Promise<unknown> | unknown;
+}
+
 export class RateLimitHealthCheck {
   async check(store: RateLimitStore): Promise<RateLimitHealthStatus> {
     const start = Date.now();
@@ -121,7 +125,11 @@ export class RateLimitHealthCheck {
   }
 }
 
-export function registerHealthCheckEndpoint(fastify: any, store: RateLimitStore): void {
+export function registerHealthCheckEndpoint(
+  fastify: any,
+  store: RateLimitStore,
+  options: RegisterHealthCheckOptions = {},
+): void {
   const checker = new RateLimitHealthCheck();
 
   fastify.get('/health/rate-limit', async (request: any, reply: any) => {
@@ -131,6 +139,10 @@ export function registerHealthCheckEndpoint(fastify: any, store: RateLimitStore)
   });
 
   fastify.get('/health/rate-limit/deep', async (request: any, reply: any) => {
+    if (options.requireDeepAuth) {
+      await options.requireDeepAuth(request);
+    }
+
     const status = await checker.checkDeep(store);
 
     reply.code(status.healthy ? 200 : 503).send(status);
