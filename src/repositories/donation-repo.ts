@@ -77,9 +77,13 @@ export class DonationRepository {
   }
 
   /**
-   * Atomic transaction: update donation status AND mark webhook event as processed.
-   * This prevents inconsistent state where one operation succeeds but the other fails
-   * (e.g., donation marked SUCCEEDED but webhook still unprocessed → re-processing on retry).
+   * Atomic transaction: claim the webhook event (processed false→true) and
+   * update the donation status. Claiming FIRST inside the same transaction
+   * gives exact-once semantics under Stripe's at-least-once redelivery: if a
+   * prior attempt crashed, processed stayed false and the event row still
+   * exists, so createIfNotExists reports it as not-yet-processed and this
+   * method re-runs; concurrent/redundant runs that find processed already true
+   * skip via claim.count === 0. A crash rolls back claim + work together.
    *
    * `stripeSubscriptionId` is optionally captured when a checkout completes in
    * subscription mode, so subsequent renewals (invoice.paid) can be linked back.
@@ -96,16 +100,17 @@ export class DonationRepository {
       operation: 'transaction',
       fn: async () =>
         this.prisma.$transaction(async (tx) => {
+          const claim = await tx.webhookEvent.updateMany({
+            where: { id: webhookEventId, processed: false },
+            data: { processed: true },
+          });
+          if (claim.count === 0) return; // already processed by another run
           await tx.donation.updateMany({
             where: { stripeSessionId },
             data: {
               status,
               ...(stripeSubscriptionId ? { stripeSubscriptionId } : {}),
             },
-          });
-          await tx.webhookEvent.update({
-            where: { id: webhookEventId },
-            data: { processed: true },
           });
         }),
     });
@@ -129,12 +134,18 @@ export class DonationRepository {
   }
 
   /**
-   * Atomic: create a SUCCEEDED recurring Donation for a renewal (invoice.paid)
-   * AND mark the webhook event processed. Model A: each renewal is its own
-   * Donation row (type=RECURRING), inheriting donor/campaign from the original.
-   * The dashboard's totalRaised already sums all SUCCEEDED rows, so renewals
-   * are included automatically; donorCount uses DISTINCT(donorEmail), so
-   * repeat renewals do not inflate the donor count.
+   * Atomic: claim the webhook event (processed false→true) and create a
+   * SUCCEEDED recurring Donation for a renewal (invoice.paid). Same exact-once
+   * claim discipline as transactionalStatusUpdate — a renewal is never created
+   * twice for the same invoice event, even across Stripe redelivery or worker
+   * crashes. Model A: each renewal is its own Donation row (type=RECURRING),
+   * inheriting donor/campaign from the original. The dashboard's totalRaised
+   * already sums all SUCCEEDED rows, so renewals are included automatically;
+   * donorCount uses DISTINCT(donorEmail), so repeat renewals do not inflate
+   * the donor count.
+   *
+   * Returns `{ alreadyProcessed: true }` when another run already handled the
+   * event (claim lost), so callers/tests can distinguish a fresh write.
    */
   createRenewal(
     input: {
@@ -154,6 +165,11 @@ export class DonationRepository {
       operation: 'transaction',
       fn: async () =>
         this.prisma.$transaction(async (tx) => {
+          const claim = await tx.webhookEvent.updateMany({
+            where: { id: webhookEventId, processed: false },
+            data: { processed: true },
+          });
+          if (claim.count === 0) return { alreadyProcessed: true };
           await tx.donation.create({
             data: {
               amount: input.amount,
@@ -167,10 +183,7 @@ export class DonationRepository {
               metadata: input.metadata ?? Prisma.JsonNull,
             },
           });
-          await tx.webhookEvent.update({
-            where: { id: webhookEventId },
-            data: { processed: true },
-          });
+          return { alreadyProcessed: false };
         }),
     });
   }

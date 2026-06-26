@@ -178,4 +178,42 @@ describe('StripeWebhookHandler — recurring donations', () => {
     });
     expect(fakes.renewals[0]?.input).not.toHaveProperty('donorEmail');
   });
+
+  test('extracts the subscription id from the LEGACY top-level invoice.subscription shape', async () => {
+    // Older Stripe API versions (and some account/endpoint configs) put the
+    // subscription at invoice.subscription instead of invoice.parent.subscription_details.
+    // The handler must read both.
+    const legacyEvent = {
+      id: 'evt_legacy',
+      type: 'invoice.paid',
+      created: NOW,
+      data: {
+        object: {
+          id: 'in_legacy',
+          amount_paid: 2000,
+          currency: 'usd',
+          billing_reason: 'subscription_cycle',
+          subscription: 'sub_legacy', // legacy top-level field
+          // no parent.subscription_details
+        },
+      },
+    } as unknown as import('stripe').default.Event;
+
+    const fakes = makeFakes();
+    const handler = makeHandler(fakes, legacyEvent);
+    await handler.handle(Buffer.from('{}'), 'sig');
+
+    expect(fakes.renewals).toHaveLength(1);
+    expect(fakes.renewals[0]?.input).toMatchObject({
+      amount: 2000,
+      stripeSubscriptionId: 'sub_legacy',
+    });
+  });
+
+  test('renewal row carries the Stripe invoice id in metadata for traceability', async () => {
+    const fakes = makeFakes();
+    const handler = makeHandler(fakes, invoicePaid({ amountPaid: 1500 }));
+    await handler.handle(Buffer.from('{}'), 'sig');
+    expect(fakes.renewals[0]?.input.metadata).toEqual({ stripeInvoiceId: 'in_1' });
+  });
 });

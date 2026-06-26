@@ -139,9 +139,12 @@ export class StripeWebhookHandler {
       donorName?: string;
       campaignId?: string;
       stripeSubscriptionId?: string;
+      metadata?: Record<string, string>;
     } = {
       amount: invoice.amount_paid,
       currency: (invoice.currency ?? 'usd').toLowerCase(),
+      // Carry the invoice id for forensic traceability (which invoice this renewal paid).
+      metadata: { stripeInvoiceId: invoice.id },
     };
 
     // Link the renewal to the original donor + campaign via the subscription.
