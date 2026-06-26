@@ -174,6 +174,9 @@ export async function buildApp(opts: BuildAppOptions = {}) {
   });
 
   app.addHook('onRequest', async (req, reply) => {
+    // Capture request start for accurate error/response latency reporting.
+    req.startedAt = Date.now();
+
     // Correlate logs with tracing.
     const span = trace.getSpan(context.active());
     const traceId = span?.spanContext().traceId;

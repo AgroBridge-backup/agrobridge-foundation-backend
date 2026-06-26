@@ -451,6 +451,17 @@ function classifyInfrastructureError(
 }
 
 /**
+ * Elapsed milliseconds since the request was received.
+ *
+ * Request start is captured by the `onRequest` hook in app.ts (`req.startedAt`).
+ * If it's missing (e.g. an error thrown before the hook ran, or a synthetic
+ * request in tests), latency is reported as 0 rather than fabricated.
+ */
+export function requestLatencyMs(req: { startedAt?: number }): number {
+  return typeof req.startedAt === 'number' ? Date.now() - req.startedAt : 0;
+}
+
+/**
  * Handle error with full observability
  * This is the main entry point for error handling
  */
@@ -459,8 +470,6 @@ export function handleErrorWithObservability(
   req: FastifyRequest,
   reply: FastifyReply
 ): ClassifiedError {
-  const startTime = Date.now();
-
   // Build error context
   const userAgent = req.headers['user-agent'];
   const context: ErrorContext = {
@@ -472,7 +481,7 @@ export function handleErrorWithObservability(
     ip: req.ip,
     userAgent: userAgent || undefined,
     timestamp: new Date(),
-    latencyMs: Date.now() - startTime,
+    latencyMs: requestLatencyMs(req),
   };
 
   // Classify the error
