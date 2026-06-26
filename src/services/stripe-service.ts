@@ -15,6 +15,14 @@ export class StripeService {
     metadata?: Record<string, string | number | boolean>;
     successUrl: string;
     cancelUrl: string;
+    /**
+     * Optional Stripe idempotency key (UUID v4). When provided, Stripe itself
+     * dedupes checkout-session creation: concurrent/retried requests with the
+     * same key return the same session. This is the source-of-truth dedupe
+     * layer that keeps the Redis idempotency cache's fail-open behavior safe —
+     * if Redis is down, two identical requests still cannot create two sessions.
+     */
+    idempotencyKey?: string;
   }) {
     const tracer = trace.getTracer('agrobridge.services');
 
@@ -60,7 +68,16 @@ export class StripeService {
 
         if (input.donorEmail) createParams.customer_email = input.donorEmail;
 
-        const session = await this.stripe.checkout.sessions.create(createParams);
+        // Pass the client's idempotency key straight to Stripe so dedupe is
+        // enforced at the payment source, independent of our Redis layer.
+        const requestOptions = input.idempotencyKey
+          ? { idempotencyKey: input.idempotencyKey }
+          : undefined;
+
+        const session = await this.stripe.checkout.sessions.create(
+          createParams,
+          requestOptions,
+        );
 
         span.setAttribute('stripe.checkout.session_id', session.id);
 
