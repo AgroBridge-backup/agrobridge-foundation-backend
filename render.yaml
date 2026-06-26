@@ -1,0 +1,41 @@
+##############################################################################
+# AgroBridge Foundation Backend - Render Blueprint
+#
+# Deploy: Connect this repo on Render Dashboard → "New Blueprint Instance"
+# Docs:   https://render.com/docs/blueprint-spec
+##############################################################################
+
+services:
+  - type: web
+    name: agrobridge-foundation-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: oregon
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "10000"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: agrobridge-foundation-db
+          property: connectionString
+      - key: REDIS_URL
+        sync: false   # Set manually (Upstash free tier)
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: CORS_ORIGIN
+        value: "https://www.agrobridgefoundation.org"
+
+databases:
+  - name: agrobridge-foundation-db
+    plan: free
+    databaseName: agrobridge_foundation
+    postgresMajorVersion: "16"
+    region: oregon
