@@ -190,18 +190,13 @@ function classifyPrismaError(
     };
   }
 
-  // Pool exhausted
-  if (code === 'P2025') {
-    return {
-      code: 'INFRA_DB_POOL_EXHAUSTED',
-      category: 'INFRASTRUCTURE',
-      severity: 'critical',
-      httpStatus: 503,
-      message: 'Database connection pool exhausted',
-    };
-  }
-
-  // Not found errors
+  // Not found errors.
+  // NOTE: P2025 is "An operation failed because it depends on one or more
+  // records that were required but not found." A prior branch here mapped
+  // P2025 to INFRA_DB_POOL_EXHAUSTED/503, which shadowed this block and
+  // caused legitimate 404s to surface as infrastructure 503s. There is no
+  // distinct Prisma "pool exhausted" code; pool pressure surfaces as P2024
+  // (handled above as a timeout) or a P10xx connection error.
   if (code === 'P2025') {
     return {
       code: 'CLIENT_NOT_FOUND',
