@@ -77,6 +77,11 @@ async function createDonationSession(app: FastifyInstance, req: any) {
 
   const stripeService = new StripeService(app.stripe, new DonationRepository(app.prisma));
 
+  // Forward the client's idempotency key to Stripe so dedupe is enforced at the
+  // payment source (independent of our Redis layer). Only UUID v4 keys reach here
+  // — see IdempotencyService.isValidKey validation in the route.
+  const idempotencyKey = req.headers['idempotency-key'] as string | undefined;
+
   const payload: {
     donationId: string;
     amount: number;
@@ -86,6 +91,7 @@ async function createDonationSession(app: FastifyInstance, req: any) {
     frequency: 'one-time' | 'monthly';
     donorEmail?: string;
     metadata?: Record<string, string | number | boolean>;
+    idempotencyKey?: string;
   } = {
     donationId: intent.donationId,
     amount: intent.amount,
@@ -97,6 +103,7 @@ async function createDonationSession(app: FastifyInstance, req: any) {
 
   if (intent.donorEmail) payload.donorEmail = intent.donorEmail;
   if (intent.metadata) payload.metadata = intent.metadata;
+  if (idempotencyKey) payload.idempotencyKey = idempotencyKey;
 
   return stripeService.createCheckoutSession(payload);
 }
