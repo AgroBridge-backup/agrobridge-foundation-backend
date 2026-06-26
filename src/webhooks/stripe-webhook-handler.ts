@@ -1,4 +1,4 @@
-import { trace } from '@opentelemetry/api';
+import { trace, type Span } from '@opentelemetry/api';
 import type Stripe from 'stripe';
 
 import { Errors } from '../errors/app-error.js';
@@ -69,11 +69,23 @@ export class StripeWebhookHandler {
           // must be atomic. A crash between these two operations would leave
           // the donation in an inconsistent state with an unprocessed webhook.
           const status = event.type === 'checkout.session.completed' ? 'SUCCEEDED' : 'EXPIRED';
+
+          // Capture the subscription id for recurring donations so that
+          // renewals (invoice.paid) can be linked back to this Donation.
+          const subscriptionId =
+            typeof session.subscription === 'string' ? session.subscription : undefined;
+
           await this.donations.transactionalStatusUpdate(
             session.id,
             status,
             event.id,
+            subscriptionId,
           );
+        } else if (event.type === 'invoice.paid') {
+          // Recurring donation renewal. Each successful renewal (cycle) creates
+          // a new SUCCEEDED Donation row of type RECURRING, linked to the
+          // original donor/campaign via the subscription id.
+          await this.handleInvoicePaid(event, span);
         } else {
           // For non-checkout events, just mark as processed
           await this.events.markProcessed(event.id);
@@ -89,4 +101,81 @@ export class StripeWebhookHandler {
       }
     });
   }
+
+  /**
+   * Process an invoice.paid event for recurring donation renewals.
+   *
+   * Double-count guard: Stripe fires invoice.paid for the FIRST subscription
+   * invoice too, but that payment is already represented by the original
+   * Donation transitioning to SUCCEEDED via checkout.session.completed. So we
+   * only create a renewal row for true cycles (billing_reason='subscription_cycle').
+   */
+  private async handleInvoicePaid(event: Stripe.Event, span: Span): Promise<void> {
+    const invoice = event.data.object as Stripe.Invoice;
+    span.setAttribute('stripe.invoice.id', invoice.id);
+    span.setAttribute('stripe.invoice.amount_paid', invoice.amount_paid);
+    span.setAttribute('stripe.invoice.billing_reason', invoice.billing_reason ?? 'unknown');
+
+    // Only genuine renewal cycles create a new Donation row. The first invoice
+    // ('subscription_create') is already covered by checkout.session.completed.
+    if (invoice.billing_reason !== 'subscription_cycle') {
+      await this.events.markProcessed(event.id);
+      return;
+    }
+
+    // Ignore zero-amount invoices (credits, proration offsets, etc.).
+    if (!invoice.amount_paid || invoice.amount_paid <= 0) {
+      await this.events.markProcessed(event.id);
+      return;
+    }
+
+    const subscriptionId = extractSubscriptionId(invoice);
+
+    // Build the renewal input without explicit `undefined` (exactOptionalPropertyTypes).
+    const input: {
+      amount: number;
+      currency: string;
+      donorEmail?: string;
+      donorName?: string;
+      campaignId?: string;
+      stripeSubscriptionId?: string;
+      metadata?: Record<string, string>;
+    } = {
+      amount: invoice.amount_paid,
+      currency: (invoice.currency ?? 'usd').toLowerCase(),
+      // Carry the invoice id for forensic traceability (which invoice this renewal paid).
+      metadata: { stripeInvoiceId: invoice.id },
+    };
+
+    // Link the renewal to the original donor + campaign via the subscription.
+    if (subscriptionId) {
+      input.stripeSubscriptionId = subscriptionId;
+      const original = await this.donations.findByStripeSubscriptionId(subscriptionId);
+      if (original) {
+        if (original.donorEmail) input.donorEmail = original.donorEmail;
+        if (original.donorName) input.donorName = original.donorName;
+        if (original.campaignId) input.campaignId = original.campaignId;
+      }
+    }
+
+    await this.donations.createRenewal(input, event.id);
+  }
+}
+
+/**
+ * Extract a subscription id from an invoice across Stripe API versions.
+ *
+ * In the pinned version (2024-12-18.acacia) the typed path is
+ * `invoice.parent.subscription_details.subscription`. Older account/endpoint
+ * versions still echo a top-level `invoice.subscription`; we read both because
+ * webhook payloads are shaped by the endpoint's configured API version, which
+ * may differ from the SDK's.
+ */
+function extractSubscriptionId(invoice: Stripe.Invoice): string | undefined {
+  const sub = invoice.parent?.subscription_details?.subscription;
+  if (sub) return typeof sub === 'string' ? sub : sub.id;
+  const legacy = (invoice as unknown as { subscription?: string | { id?: string } }).subscription;
+  if (typeof legacy === 'string') return legacy;
+  if (legacy && typeof legacy === 'object' && typeof legacy.id === 'string') return legacy.id;
+  return undefined;
 }
