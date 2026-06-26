@@ -80,11 +80,15 @@ export class DonationRepository {
    * Atomic transaction: update donation status AND mark webhook event as processed.
    * This prevents inconsistent state where one operation succeeds but the other fails
    * (e.g., donation marked SUCCEEDED but webhook still unprocessed → re-processing on retry).
+   *
+   * `stripeSubscriptionId` is optionally captured when a checkout completes in
+   * subscription mode, so subsequent renewals (invoice.paid) can be linked back.
    */
   transactionalStatusUpdate(
     stripeSessionId: string,
     status: DonationStatus,
     webhookEventId: string,
+    stripeSubscriptionId?: string,
   ) {
     return withDbSpan({
       name: 'db.donation.transactional_status_update',
@@ -94,7 +98,74 @@ export class DonationRepository {
         this.prisma.$transaction(async (tx) => {
           await tx.donation.updateMany({
             where: { stripeSessionId },
-            data: { status },
+            data: {
+              status,
+              ...(stripeSubscriptionId ? { stripeSubscriptionId } : {}),
+            },
+          });
+          await tx.webhookEvent.update({
+            where: { id: webhookEventId },
+            data: { processed: true },
+          });
+        }),
+    });
+  }
+
+  /**
+   * Find the original (oldest) donation for a Stripe subscription. Used to
+   * link a renewal's donor/campaign back to the originating checkout.
+   */
+  findByStripeSubscriptionId(subscriptionId: string) {
+    return withDbSpan({
+      name: 'db.donation.find_by_subscription',
+      model: 'Donation',
+      operation: 'findFirst',
+      fn: async () =>
+        this.prisma.donation.findFirst({
+          where: { stripeSubscriptionId: subscriptionId, deletedAt: null },
+          orderBy: { createdAt: 'asc' },
+        }),
+    });
+  }
+
+  /**
+   * Atomic: create a SUCCEEDED recurring Donation for a renewal (invoice.paid)
+   * AND mark the webhook event processed. Model A: each renewal is its own
+   * Donation row (type=RECURRING), inheriting donor/campaign from the original.
+   * The dashboard's totalRaised already sums all SUCCEEDED rows, so renewals
+   * are included automatically; donorCount uses DISTINCT(donorEmail), so
+   * repeat renewals do not inflate the donor count.
+   */
+  createRenewal(
+    input: {
+      amount: number;
+      currency: string;
+      donorEmail?: string;
+      donorName?: string;
+      campaignId?: string;
+      stripeSubscriptionId?: string;
+      metadata?: Prisma.InputJsonValue;
+    },
+    webhookEventId: string,
+  ) {
+    return withDbSpan({
+      name: 'db.donation.create_renewal',
+      model: 'Donation',
+      operation: 'transaction',
+      fn: async () =>
+        this.prisma.$transaction(async (tx) => {
+          await tx.donation.create({
+            data: {
+              amount: input.amount,
+              currency: input.currency,
+              status: 'SUCCEEDED',
+              type: 'RECURRING',
+              donorEmail: input.donorEmail ?? null,
+              donorName: input.donorName ?? null,
+              campaignId: input.campaignId ?? null,
+              stripeSubscriptionId: input.stripeSubscriptionId ?? null,
+              metadata: input.metadata ?? Prisma.JsonNull,
+            },
           });
           await tx.webhookEvent.update({
             where: { id: webhookEventId },
