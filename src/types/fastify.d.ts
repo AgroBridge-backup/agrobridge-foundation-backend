@@ -16,5 +16,11 @@ declare module 'fastify' {
       email: string;
       role: 'ADMIN' | 'SUPER_ADMIN';
     };
+    /**
+     * Verifier bound to the PREVIOUS JWT secret. Only present when
+     * `JWT_SECRET_PREVIOUS` is configured (zero-downtime rotation window).
+     * Registered as a namespaced @fastify/jwt instance in app.ts.
+     */
+    previousJwtVerify?: (options?: unknown) => Promise<Record<string, unknown>>;
   }
 }
