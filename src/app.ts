@@ -143,35 +143,41 @@ export async function buildApp(opts: BuildAppOptions = {}) {
     runFirst: true,
   });
 
-  app.register(swagger, {
-    openapi: {
-      info: {
-        title: 'Agrobridge Foundation API',
-        description: 'Backend API for Agrobridge Foundation',
-        version: '0.1.0',
-      },
-      servers: [
-        {
-          url: 'http://localhost:3000',
-          description: 'Development server',
+  // API docs (Swagger UI at /docs) are only mounted outside production to avoid
+  // exposing the full API surface to unauthenticated callers. In production,
+  // /docs returns 404. The OpenAPI contract is still authored/checked via the
+  // contracts/ pipeline (see contracts/COMPATIBILITY_POLICY.md).
+  if (env.NODE_ENV !== 'production') {
+    app.register(swagger, {
+      openapi: {
+        info: {
+          title: 'Agrobridge Foundation API',
+          description: 'Backend API for Agrobridge Foundation',
+          version: '0.1.0',
         },
-      ],
-    },
-  });
+        servers: [
+          {
+            url: 'http://localhost:3000',
+            description: 'Development server',
+          },
+        ],
+      },
+    });
 
-  app.register(swaggerUI, {
-    routePrefix: '/docs',
-    uiConfig: {
-      docExpansion: 'list',
-      deepLinking: true,
-    },
-    staticCSP: true,
-    transformStaticCSP: (header: any) => header,
-    transformSpecification: (swaggerObject: any, request: any, reply: any) => {
-      return swaggerObject;
-    },
-    transformSpecificationClone: true,
-  });
+    app.register(swaggerUI, {
+      routePrefix: '/docs',
+      uiConfig: {
+        docExpansion: 'list',
+        deepLinking: true,
+      },
+      staticCSP: true,
+      transformStaticCSP: (header: any) => header,
+      transformSpecification: (swaggerObject: any, request: any, reply: any) => {
+        return swaggerObject;
+      },
+      transformSpecificationClone: true,
+    });
+  }
 
   app.addHook('onRequest', async (req, reply) => {
     // Correlate logs with tracing.
