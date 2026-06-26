@@ -11,6 +11,8 @@ declare module 'fastify' {
 
   interface FastifyRequest {
     rawBody?: Buffer;
+    /** Wall-clock ms (Date.now()) captured at the onRequest hook. */
+    startedAt?: number;
     admin?: {
       adminUserId: string;
       email: string;
