@@ -25,6 +25,7 @@ import {
   startClassificationTimer,
   getCurrentErrorRate,
 } from '../observability/error-metrics.js';
+import { notifyFounderIfCritical } from '../observability/founder-notifier.js';
 import { trace, context as otelContext, SpanStatusCode } from '@opentelemetry/api';
 
 /**
@@ -521,6 +522,16 @@ export function handleErrorWithObservability(
     shouldAlert: classified.shouldAlert,
     shouldEscalate: classified.shouldEscalate,
   }, `Error [${classified.code}] ${classified.message}`);
+
+  // Page the founder on critical errors (fire-and-forget, severity-gated,
+  // debounced). Donation-pipeline / DB / Stripe outages surface here.
+  notifyFounderIfCritical({
+    severity: classified.severity,
+    code: classified.code,
+    message: classified.message,
+    requestId: context.requestId,
+    endpoint: context.endpoint,
+  });
 
   return classified;
 }

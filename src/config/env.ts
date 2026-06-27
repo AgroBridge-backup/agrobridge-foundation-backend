@@ -28,6 +28,9 @@ const envSchema = z.object({
   // Bearer token for Prometheus /metrics endpoint authentication.
   // Required in production; omit in dev for unauthenticated access.
   METRICS_AUTH_TOKEN: z.string().min(16).optional(),
+  // Optional webhook (Slack/Discord/Google Chat incoming webhook) paged when a
+  // CRITICAL error occurs. Fire-and-forget, debounced. Omit to disable.
+  FOUNDER_NOTIFY_WEBHOOK_URL: z.string().url().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;
