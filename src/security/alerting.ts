@@ -27,8 +27,13 @@ export interface AlertConfiguration {
   severityThreshold: ThreatSeverity | AnomalySeverity;
   rateLimitWindowMs: number;
   maxAlertsPerWindow: number;
-  config: SlackConfig | EmailConfig | PagerDutyConfig | WebhookConfig;
+  config: ConsoleConfig | SlackConfig | EmailConfig | PagerDutyConfig | WebhookConfig;
 }
+
+/**
+ * Console configuration (no external settings required)
+ */
+interface ConsoleConfig {}
 
 /**
  * Slack configuration
@@ -119,11 +124,9 @@ const SEVERITY_RANK: Record<string, number> = {
   [ThreatSeverity.LOW]: 1,
   [ThreatSeverity.MEDIUM]: 2,
   [ThreatSeverity.HIGH]: 3,
-  [ThreatSeverity.CRITICAL]: 4,
-  [AnomalySeverity.LOW]: 1,
-  [AnomalySeverity.MEDIUM]: 2,
-  [AnomalySeverity.HIGH]: 3,
-  [AnomalySeverity.CRITICAL]: 4
+  [ThreatSeverity.CRITICAL]: 4
+  // AnomalySeverity has identical string values to ThreatSeverity
+  // ({low,medium,high,critical}), so explicit entries would be duplicate keys.
 };
 
 /**
@@ -500,7 +503,7 @@ export class SecurityAlerting {
     alertSeverity: ThreatSeverity | AnomalySeverity,
     threshold: ThreatSeverity | AnomalySeverity
   ): boolean {
-    return SEVERITY_RANK[alertSeverity] >= SEVERITY_RANK[threshold];
+    return (SEVERITY_RANK[alertSeverity] ?? 0) >= (SEVERITY_RANK[threshold] ?? 0);
   }
 
   /**
@@ -642,11 +645,7 @@ export class SecurityAlerting {
       [ThreatSeverity.LOW]: '#36a64f',
       [ThreatSeverity.MEDIUM]: '#ff9900',
       [ThreatSeverity.HIGH]: '#ff0000',
-      [ThreatSeverity.CRITICAL]: '#990000',
-      [AnomalySeverity.LOW]: '#36a64f',
-      [AnomalySeverity.MEDIUM]: '#ff9900',
-      [AnomalySeverity.HIGH]: '#ff0000',
-      [AnomalySeverity.CRITICAL]: '#990000'
+      [ThreatSeverity.CRITICAL]: '#990000'
     };
     return colors[severity] || '#808080';
   }
@@ -659,11 +658,7 @@ export class SecurityAlerting {
       [ThreatSeverity.LOW]: ':information_source:',
       [ThreatSeverity.MEDIUM]: ':warning:',
       [ThreatSeverity.HIGH]: ':exclamation:',
-      [ThreatSeverity.CRITICAL]: ':rotating_light:',
-      [AnomalySeverity.LOW]: ':information_source:',
-      [AnomalySeverity.MEDIUM]: ':warning:',
-      [AnomalySeverity.HIGH]: ':exclamation:',
-      [AnomalySeverity.CRITICAL]: ':rotating_light:'
+      [ThreatSeverity.CRITICAL]: ':rotating_light:'
     };
     return emojis[severity] || ':grey_question:';
   }
@@ -676,11 +671,7 @@ export class SecurityAlerting {
       [ThreatSeverity.LOW]: 'warning',
       [ThreatSeverity.MEDIUM]: 'warning',
       [ThreatSeverity.HIGH]: 'error',
-      [ThreatSeverity.CRITICAL]: 'critical',
-      [AnomalySeverity.LOW]: 'warning',
-      [AnomalySeverity.MEDIUM]: 'warning',
-      [AnomalySeverity.HIGH]: 'error',
-      [AnomalySeverity.CRITICAL]: 'critical'
+      [ThreatSeverity.CRITICAL]: 'critical'
     };
     return mapping[severity] || 'warning';
   }

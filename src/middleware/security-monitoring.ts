@@ -6,6 +6,7 @@
 
 import { FastifyRequest, FastifyReply, HookHandlerDoneFunction } from 'fastify';
 import { getRedisClient } from '../cache/redis-client.js';
+import { loadEnv } from '../config/env.js';
 import {
   initializeThreatDetection,
   ThreatDetectionEngine,
@@ -32,7 +33,7 @@ let isInitialized = false;
 export async function initializeSecurityMonitoring(): Promise<void> {
   if (isInitialized) return;
 
-  const redis = getRedisClient();
+  const redis = getRedisClient(loadEnv());
   if (!redis) {
     console.warn('[SecurityMonitoring] Redis not available, security monitoring disabled');
     return;
@@ -404,6 +405,8 @@ export async function blockIP(
     type: ThreatType.SUSPICIOUS_TRAFFIC,
     severity: ThreatSeverity.HIGH,
     sourceIp: ip,
+    userId: undefined,
+    sessionId: undefined,
     path: '/manual',
     method: 'POST',
     userAgent: 'admin',

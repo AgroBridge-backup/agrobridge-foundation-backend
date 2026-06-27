@@ -156,10 +156,10 @@ export function determineSeverityFromMetrics(metrics: {
   failedPaymentRate?: number;
 }): SeverityLevel {
   const checks = [
-    { metric: 'error_rate', value: metrics.errorRate, thresholds: AUTOMATIC_SEVERITY_CRITERIA[0].thresholds },
-    { metric: 'latency_p99', value: metrics.latencyP99, thresholds: AUTOMATIC_SEVERITY_CRITERIA[1].thresholds },
+    { metric: 'error_rate', value: metrics.errorRate, thresholds: AUTOMATIC_SEVERITY_CRITERIA[0]!.thresholds },
+    { metric: 'latency_p99', value: metrics.latencyP99, thresholds: AUTOMATIC_SEVERITY_CRITERIA[1]!.thresholds },
     { metric: 'availability', value: metrics.availability ? 100 - metrics.availability : undefined, thresholds: { sev1: 5, sev2: 3, sev3: 1, sev4: 0.5 } },
-    { metric: 'failed_payment_rate', value: metrics.failedPaymentRate, thresholds: AUTOMATIC_SEVERITY_CRITERIA[3].thresholds },
+    { metric: 'failed_payment_rate', value: metrics.failedPaymentRate, thresholds: AUTOMATIC_SEVERITY_CRITERIA[3]!.thresholds },
   ];
 
   let highestSeverity = SeverityLevel.SEV5;
