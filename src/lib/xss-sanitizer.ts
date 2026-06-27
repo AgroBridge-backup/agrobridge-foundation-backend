@@ -81,6 +81,8 @@ const RICH_TEXT_CONFIG = {
 export const XSS_PATTERNS = {
   // Script tag variations
   SCRIPT_TAG: /<script[^>]*>[\s\S]*?<\/script>/gi,
+  // Unclosed/opening script tag, e.g. `<script>` or `<script src=...>` (no closer)
+  SCRIPT_TAG_OPEN: /<script[^>]*>/gi,
   // Event handlers
   EVENT_HANDLERS: /\s(on\w+)\s*=\s*["']?[^"'>]+["']?/gi,
   // JavaScript protocol
@@ -124,15 +126,21 @@ export function sanitizePlainText(input: string): string {
   // First pass: DOMPurify with strict settings
   let sanitized = purify.sanitize(input, PLAIN_TEXT_CONFIG) as unknown as string;
 
-  // Second pass: Remove any remaining HTML entities that might decode dangerously
+  // Second pass: decode the angle-bracket entities DOMPurify emitted so the
+  // third pass can pattern-match and strip them.
   sanitized = sanitized.replace(/&lt;/g, '<').replace(/&gt;/g, '>');
 
-  // Third pass: Check for any remaining suspicious patterns
-  if (containsXssPatterns(sanitized)) {
-    // If suspicious patterns remain after sanitization,
-    // aggressively strip all angle brackets
-    sanitized = sanitized.replace(/[<>]/g, '');
-  }
+  // Third pass: defense-in-depth. DOMPurify targets tags, but residual XSS
+  // fragments can survive (template expressions, event-handler-like attribute
+  // strings, unclosed script tags). Strip every detected pattern, then strip
+  // ALL angle brackets — plain-text contact content has no legitimate use for
+  // them, and removing them eliminates any rendering-context ambiguity.
+  sanitized = sanitized
+    .replace(XSS_PATTERNS.SCRIPT_TAG, '')
+    .replace(XSS_PATTERNS.SCRIPT_TAG_OPEN, '')
+    .replace(XSS_PATTERNS.EVENT_HANDLERS, '')
+    .replace(XSS_PATTERNS.TEMPLATE_EXPRESSION, '')
+    .replace(/[<>]/g, '');
 
   return sanitized.trim();
 }
@@ -173,6 +181,9 @@ export function detectXssPatterns(input: string): {
   if (XSS_PATTERNS.SCRIPT_TAG.test(input)) {
     detected.push('SCRIPT_TAG');
   }
+  if (XSS_PATTERNS.SCRIPT_TAG_OPEN.test(input)) {
+    detected.push('SCRIPT_TAG_OPEN');
+  }
   if (XSS_PATTERNS.EVENT_HANDLERS.test(input)) {
     detected.push('EVENT_HANDLERS');
   }
@@ -198,7 +209,11 @@ export function detectXssPatterns(input: string): {
   let severity: 'none' | 'low' | 'medium' | 'high' = 'none';
 
   if (hasXss) {
-    if (detected.includes('SCRIPT_TAG') || detected.includes('JS_PROTOCOL')) {
+    if (
+      detected.includes('SCRIPT_TAG') ||
+      detected.includes('SCRIPT_TAG_OPEN') ||
+      detected.includes('JS_PROTOCOL')
+    ) {
       severity = 'high';
     } else if (detected.length >= 2) {
       severity = 'medium';

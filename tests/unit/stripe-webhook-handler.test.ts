@@ -6,7 +6,7 @@ function makeHandler(opts?: {
   constructEvent?: any;
   createIfNotExists?: any;
   markProcessed?: any;
-  updateStatusByStripeSessionId?: any;
+  transactionalStatusUpdate?: any;
 }) {
   const stripe = {
     webhooks: {
@@ -23,8 +23,9 @@ function makeHandler(opts?: {
   } as unknown as StripeWebhookHandler['events'];
 
   const donations = {
-    updateStatusByStripeSessionId:
-      opts?.updateStatusByStripeSessionId ?? (async () => ({ count: 1 })),
+    // Current handler API: atomic claim + status update.
+    transactionalStatusUpdate:
+      opts?.transactionalStatusUpdate ?? (async () => undefined),
   } as unknown as StripeWebhookHandler['donations'];
 
   return new StripeWebhookHandler(stripe, 'whsec_x', events, donations);
@@ -49,9 +50,13 @@ describe('StripeWebhookHandler', () => {
         type: 'checkout.session.completed',
         data: { object: { id: 'cs_123' } },
       }),
-      updateStatusByStripeSessionId: async (_id: string, s: string) => {
+      transactionalStatusUpdate: async (
+        _sessionId: string,
+        s: string,
+        _eventId: string,
+        _subscriptionId?: string,
+      ) => {
         status = s;
-        return { count: 1 };
       },
     });
 

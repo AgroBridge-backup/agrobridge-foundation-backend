@@ -238,9 +238,13 @@ export async function buildApp(opts: BuildAppOptions = {}) {
 
     // Our typed errors - return with full details
     if (err instanceof AppError) {
+      // Respond with the AppError's own semantic code/message (the documented
+      // API contract: VALIDATION_ERROR | UNAUTHORIZED | FORBIDDEN | ...). The
+      // classified taxonomy code (e.g. SEC_AUTHENTICATION) is internal — used
+      // above for metrics/logging, NOT exposed to API consumers.
       return reply
         .status(classified.httpStatus)
-        .send(fail({ code: classified.code, message: classified.message, details: err.details }));
+        .send(fail({ code: err.code, message: err.message, details: err.details }));
     }
 
     // Fastify schema validation (AJV) lands here with statusCode
