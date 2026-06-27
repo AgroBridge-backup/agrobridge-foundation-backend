@@ -54,6 +54,10 @@ export class DonationService {
           amount,
           currency,
           isAnonymous,
+          // Persist the donation type so recurring vs one-time is queryable.
+          // Previously `type` was computed and traced but never written, so every
+          // donation (including monthly) was stored as ONE_TIME.
+          type,
         };
 
         if (donorEmail) createPayload.donorEmail = donorEmail;
