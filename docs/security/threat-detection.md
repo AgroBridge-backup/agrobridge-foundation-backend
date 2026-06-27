@@ -1,5 +1,7 @@
 # Threat Detection and Security Monitoring
 
+> ⚠️ **Historical reference only.** The entire threat-detection / security-monitoring subsystem documented below (`src/security/*` — threat-detection, threat-rules, anomaly-detector, alerting, auto-response — plus `src/middleware/security-monitoring.ts` and `src/incident/severity.ts`) was dead code and was **removed in PR #14**. None of these modules, the `/api/security/*` endpoints, the listed env vars, or the `security_*` Prometheus metrics exist in the current codebase. This document is retained so stale links still explain what happened; do not treat it as current behavior.
+
 ## Overview
 
 This document describes the comprehensive threat detection and security monitoring system implemented for the AgroBridge Foundation backend.

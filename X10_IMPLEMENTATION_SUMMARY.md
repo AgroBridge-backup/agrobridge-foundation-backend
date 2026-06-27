@@ -117,17 +117,7 @@
     - TypeScript types included
 
 12. ✅ **ML Abuse Detection**
-    - File: `src/ml/abuse-detector.ts`
-    - IP reputation checking
-    - Request frequency analysis
-    - User behavior profiling
-    - Bot detection (User-Agent analysis)
-    - VPN/Tor detection
-    - Geo-location risk assessment
-    - Suspicious pattern detection
-    - Machine learning prediction model
-    - Confidence scoring
-    - Risk level classification
+    _(Removed in #14 — this subsystem was dead code and has been deleted; see PR #14. Rule-based abuse detection still ships from `src/rate-limiting/abuse-detection.ts`.)_
 
 ---
 

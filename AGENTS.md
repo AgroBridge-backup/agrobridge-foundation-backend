@@ -151,7 +151,7 @@ JWT tokens stored in signed HTTP-only cookies (`ab_admin`). Login → cookie set
 
 ### Abuse Detection
 
-ML-based abuse detection in `src/ml/abuse-detector.ts` with configurable cache TTL, risk scoring, and geo-IP analysis.
+Rule-based abuse detection in `src/rate-limiting/abuse-detection.ts` — scores failed logins, rapid requests, and suspicious patterns, short-circuiting abusive requests with a 429 (tier `ABUSE`) before the tiered limiter. _(The prior ML-based `src/ml/abuse-detector.ts` was dead code and was removed in PR #14.)_
 
 ## Known Issues
 

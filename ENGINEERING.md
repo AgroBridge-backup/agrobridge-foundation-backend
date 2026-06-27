@@ -64,7 +64,7 @@ Entry: `src/server.ts` → `src/app.ts` (`buildApp()`).
 ### 2.2 Graceful shutdown (`src/server.ts:22-59`)
 - Hooks `SIGTERM`, `SIGINT`.
 - 15s (`SHUTDOWN_TIMEOUT_MS`) force-exit safety net via `setTimeout().unref()` — guarantees termination even if `app.close()` hangs.
-- `app.close()` drains in-flight requests then runs `onClose` hooks (Prisma `$disconnect`, Redis `quit`, abuse-detector cleanup, login-limiter destroy).
+- `app.close()` drains in-flight requests then runs `onClose` hooks (Prisma `$disconnect`, Redis `quit`, login-limiter destroy).
 - `unhandledRejection` → logged (process continues); `uncaughtException` → **fatal exit 1**. This is the correct asymmetry.
 
 ### 2.3 App factory (`src/app.ts`)
@@ -224,7 +224,7 @@ There are **two** rate limiters and both run in production:
 > **Effective limit per route = the stricter of the two.** For donations that's 10/min (tiered), gated behind a 200/min global cap. The global cap is largely subsumed by the tiered system but acts as a coarse per-instance DoS guard. When reasoning about limits, **always reason about the tiered limiter**; treat the global one as belt-and-suspenders.
 
 ### 6.2 Abuse detection
-`src/rate-limiting/abuse-detection.ts` + `src/ml/abuse-detector.ts` + `src/security/*`.
+`src/rate-limiting/abuse-detection.ts`. _(The prior `src/ml/abuse-detector.ts` and `src/security/*` subsystems were dead code and were removed in PR #14.)_
 Runs **before** the tiered limiter inside `rateLimitMiddleware` (`middleware.ts:14`). If `abuseScore.isAbusive`, the request is short-circuited with a 429 (`tier: ABUSE`) and an OTel span. Has its own cleanup loop (started/stopped in `auth.ts:55-63`).
 
 ### 6.3 Auth security (`src/services/auth-service.ts`)
