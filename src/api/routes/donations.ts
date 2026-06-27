@@ -1,7 +1,10 @@
 import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
 
+import { verifyAdminToken } from '../../auth/jwt.js';
 import { ok, fail } from '../../http/response.js';
 import { DonationRepository } from '../../repositories/donation-repo.js';
+import { DisbursementRepository } from '../../repositories/disbursement-repo.js';
 import { DonationService } from '../../services/donation-service.js';
 import { StripeService } from '../../services/stripe-service.js';
 import { getIdempotencyService, IdempotencyService } from '../../services/idempotency-service.js';
@@ -39,6 +42,65 @@ export async function donationRoutes(app: FastifyInstance) {
     // No idempotency key — execute directly (backwards compatible)
     const session = await createDonationSession(app, req);
     return ok(session);
+  });
+
+  // ===========================================================================
+  // DONOR-FACING DISTRIBUTION (where did my money go?)
+  //
+  // Auth model: a valid admin JWT (admins see everything) OR a donor presenting
+  // a `stripeSessionId` query param that matches the donation's stripeSessionId.
+  // Donors have no User account; they get the session id from their Stripe
+  // receipt, which acts as a capability token for their own donation.
+  //
+  // Never exposes recipientIdentifier to donors (only admin endpoints do).
+  // ===========================================================================
+  app.get('/donations/:id/distribution', async (req, reply) => {
+    const { id } = req.params as { id: string };
+
+    const idResult = z.string().uuid().safeParse(id);
+    if (!idResult.success) {
+      reply.status(400);
+      return fail({ code: 'VALIDATION_ERROR', message: 'Invalid donation ID format' });
+    }
+
+    const donation = await app.prisma.donation.findUnique({
+      where: { id },
+      select: { id: true, stripeSessionId: true },
+    });
+    if (!donation) {
+      reply.status(404);
+      return fail({ code: 'NOT_FOUND', message: 'Donation not found' });
+    }
+
+    // Auth: admin JWT OR donor with a matching stripeSessionId capability.
+    const isAdmin = (await verifyAdminToken(req)) !== null;
+    const query = req.query as { stripeSessionId?: string };
+    const donorAuthorized =
+      !!donation.stripeSessionId &&
+      typeof query.stripeSessionId === 'string' &&
+      query.stripeSessionId === donation.stripeSessionId;
+
+    if (!isAdmin && !donorAuthorized) {
+      reply.status(401);
+      return fail({ code: 'UNAUTHORIZED', message: 'Unauthorized' });
+    }
+
+    const repo = new DisbursementRepository(app.prisma);
+    const distribution = await repo.findCompletedByDonationId(id);
+
+    if (!distribution) {
+      return ok({ disbursed: false });
+    }
+
+    const line = distribution.lines[0];
+    return ok({
+      disbursed: true,
+      recipientName: distribution.recipientName,
+      disbursedAt: distribution.disbursedAt,
+      externalReference: distribution.externalReference,
+      amount: line ? line.appliedAmount : 0,
+      currency: distribution.currency,
+    });
   });
 }
 

@@ -43,6 +43,22 @@ enum CampaignStatus {
   CANCELLED
 }
 
+// Disbursements are MANUAL money-out records: a human transfers funds to a
+// producer offline and the software only TRACKS the transfer for audit and
+// donor-facing reporting. No Stripe Connect / automated payouts / KYC.
+enum DisbursementMethod {
+  BANK_TRANSFER
+  MANUAL_STRIPE
+  OTHER
+}
+
+enum DisbursementStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REVERSED
+}
+
 // =============================================================================
 // CAMPAIGNS - Agricultural project funding campaigns
 // =============================================================================
@@ -52,8 +68,8 @@ model Campaign {
   name        String         @db.VarChar(200)
   slug        String         @unique @db.VarChar(100)
   description String
-  goalAmount  Int            // Target amount in minor units (cents)
-  currency    String         @db.VarChar(3) @default("usd")
+  goalAmount  Int // Target amount in minor units (cents)
+  currency    String         @default("usd") @db.VarChar(3)
   status      CampaignStatus @default(DRAFT)
   startDate   DateTime?
   endDate     DateTime?
@@ -61,13 +77,13 @@ model Campaign {
   metadata    Json?
 
   // Soft delete support
-  deletedAt   DateTime?
+  deletedAt DateTime?
 
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Relations
-  donations   Donation[]
+  donations Donation[]
 
   @@index([status])
   @@index([slug])
@@ -81,7 +97,7 @@ model Campaign {
 
 model Donation {
   id              String         @id @default(uuid()) @db.Uuid
-  amount          Int            // Amount in minor units (cents)
+  amount          Int // Amount in minor units (cents)
   currency        String         @db.VarChar(3)
   status          DonationStatus @default(PENDING)
   type            DonationType   @default(ONE_TIME)
@@ -93,17 +109,20 @@ model Donation {
   metadata        Json?
 
   // Campaign association (optional - for general donations)
-  campaignId      String?        @db.Uuid
-  campaign        Campaign?      @relation(fields: [campaignId], references: [id])
+  campaignId String?   @db.Uuid
+  campaign   Campaign? @relation(fields: [campaignId], references: [id])
 
   // Recurring donation support
-  stripeSubscriptionId String?   @db.VarChar(255)
+  stripeSubscriptionId String? @db.VarChar(255)
+
+  // Disbursement linkage (money-out traceability; one line per donation)
+  disbursementLines DisbursementLine[]
 
   // Soft delete support
-  deletedAt       DateTime?
+  deletedAt DateTime?
 
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([status, createdAt])
   @@index([createdAt])
@@ -120,11 +139,11 @@ model Donation {
 // =============================================================================
 
 model ContactRequest {
-  id        String               @id @default(uuid()) @db.Uuid
-  name      String               @db.VarChar(140)
-  email     String               @db.VarChar(254)
-  message   String
-  status    ContactRequestStatus @default(NEW)
+  id      String               @id @default(uuid()) @db.Uuid
+  name    String               @db.VarChar(140)
+  email   String               @db.VarChar(254)
+  message String
+  status  ContactRequestStatus @default(NEW)
 
   // Admin notes for internal tracking
   adminNotes String?
@@ -132,8 +151,8 @@ model ContactRequest {
   // Soft delete support
   deletedAt DateTime?
 
-  createdAt DateTime             @default(now())
-  updatedAt DateTime             @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([status, createdAt])
   @@index([email])
@@ -173,13 +192,71 @@ model AdminUser {
   lockedUntil    DateTime?
 
   // Soft delete support
-  deletedAt      DateTime?
+  deletedAt DateTime?
 
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-  createdBy      String?   @db.Uuid // Admin who created this user
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy String?  @db.Uuid // Admin who created this user
 
   @@index([role])
   @@index([deletedAt])
   @@index([email, deletedAt])
+}
+
+// =============================================================================
+// DISBURSEMENTS - Manual money-out tracking (audit + donor reporting)
+// =============================================================================
+//
+// Design rationale: Disbursement is MANUAL — a human transfers funds to a
+// producer offline (bank transfer, etc.); this table only RECORDS that the
+// transfer happened so finance can audit it and donors can see their money
+// reached its recipient. No automated payouts, no Stripe Connect, no KYC.
+//
+// The join table (DisbursementLine) is intentionally separate from
+// Disbursement.amount so the real transfer total (which may include fees or
+// top-ups that exceed the sum of the linked donations) can differ from the
+// sum of per-donation applied amounts. Donation (donor-facing money-in) stays
+// immutable; a reversal is modeled as a status flip on the Disbursement, never
+// a mutation of the original Donation row. Money is in MINOR UNITS (cents) to
+// match Donation.amount.
+
+model Disbursement {
+  id                  String             @id @default(uuid()) @db.Uuid
+  amount              Int // actual transferred total, cents (may exceed sum of lines: fees/top-ups)
+  currency            String             @db.VarChar(3)
+  recipientName       String             @db.VarChar(200)
+  recipientIdentifier String             @db.VarChar(255)
+  method              DisbursementMethod @default(BANK_TRANSFER)
+  externalReference   String?            @db.VarChar(255)
+  status              DisbursementStatus @default(PENDING)
+  disbursedAt         DateTime?
+  notes               String?
+  metadata            Json?
+  createdBy           String?            @db.Uuid // AdminUser.id who entered it
+  deletedAt           DateTime?
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  // Relations
+  lines DisbursementLine[]
+
+  @@index([status, createdAt])
+  @@index([recipientName])
+  @@index([createdBy])
+  @@index([deletedAt])
+}
+
+model DisbursementLine {
+  id             String   @id @default(uuid()) @db.Uuid
+  disbursementId String   @db.Uuid
+  donationId     String   @db.Uuid
+  appliedAmount  Int // portion of the donation disbursed, cents
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  disbursement Disbursement @relation(fields: [disbursementId], references: [id], onDelete: Cascade)
+  donation     Donation     @relation(fields: [donationId], references: [id], onDelete: Restrict)
+
+  @@unique([donationId]) // policy: one disbursement per donation (drop later if partials needed)
+  @@index([disbursementId])
 }
