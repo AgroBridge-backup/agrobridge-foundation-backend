@@ -30,20 +30,28 @@ groups:
           runbook_url: "https://wiki.internal/runbooks/database-connection"
           dashboard_url: "https://grafana.internal/d/agrobridge-errors"
 
-      # Critical: Database pool exhausted
+      # Critical: Database pool pressure / connection saturation.
+      # NOTE: Prisma has no distinct "pool exhausted" code — pool pressure
+      # surfaces as P2024 timeouts, classified to INFRA_DB_TIMEOUT (see
+      # src/middleware/error-observability.ts). INFRA_DB_POOL_EXHAUSTED was
+      # previously produced by a P2025 misclassification (now fixed), so this
+      # alert is retargeted to the actual signal. DatabaseTimeouts (below)
+      # covers the same code at a lower, sustained threshold.
       - alert: DatabasePoolExhausted
         expr: |
-          sum(rate(error_rate_total{code="INFRA_DB_POOL_EXHAUSTED"}[1m])) > 0
+          sum(rate(error_rate_total{code="INFRA_DB_TIMEOUT"}[1m])) > 1
         for: 30s
         labels:
           severity: critical
           category: infrastructure
           team: sre
         annotations:
-          summary: "Database connection pool exhausted"
+          summary: "Database pool pressure (timeouts spiking)"
           description: |
-            The database connection pool is exhausted. This may cause 
-            cascading failures across the application.
+            Database connection timeouts exceed 1/s — the Prisma connection
+            pool is saturating. This may cause cascading failures across the
+            application. Consider raising DB_POOL_MAX or investigating slow
+            queries.
           runbook_url: "https://wiki.internal/runbooks/db-pool-exhaustion"
 
       # High: Database timeouts
