@@ -9,6 +9,7 @@ const artifactSensitivity = process.env.ARTIFACT_SENSITIVITY ?? 'internal';
 const gateSpecs = [
   ['lint', process.env.GATE_LINT],
   ['build', process.env.GATE_BUILD],
+  ['knip', process.env.GATE_KNIP],
   ['unit', process.env.GATE_UNIT],
   ['integration', process.env.GATE_INTEGRATION],
   ['e2e', process.env.GATE_E2E],
@@ -41,7 +42,7 @@ const gates = gateSpecs.map(([name, status]) => ({
   status: normalizeResult(status),
 }));
 
-const requiredGateNames = ['lint', 'build', 'unit', 'integration', 'e2e'];
+const requiredGateNames = ['lint', 'build', 'knip', 'unit', 'integration', 'e2e'];
 const requiredGatesGreen = gates
   .filter((gate) => requiredGateNames.includes(gate.name))
   .every((gate) => gate.status === 'PASS');

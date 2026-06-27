@@ -37,6 +37,7 @@
     "lint:eslint": "eslint . --max-warnings=0",
     "lint:repo": "node scripts/check-repo-hygiene.mjs && node scripts/check-test-lifecycle.mjs",
     "lint": "npm run lint:eslint && npm run lint:repo",
+    "knip": "knip",
     "report:release": "node scripts/generate-release-report.mjs artifacts/release/release-readiness.md",
     "format": "prettier --write ."
   },
@@ -82,6 +83,7 @@
     "eslint-config-prettier": "^9.1.0",
     "eslint-plugin-import": "^2.29.1",
     "globals": "^15.9.0",
+    "knip": "^6.22.0",
     "prettier": "^3.3.3",
     "prisma": "^7.2.0",
     "testcontainers": "^11.11.0",
