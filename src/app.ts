@@ -27,6 +27,25 @@ export type BuildAppOptions = {
   logger?: FastifyBaseLogger | boolean;
 };
 
+/**
+ * Map an HTTP status to the documented semantic ErrorCode for API responses.
+ * The internal taxonomy code (classified.code) is reserved for metrics/logging.
+ */
+function semanticCodeForStatus(status: number): string {
+  switch (status) {
+    case 401:
+      return 'UNAUTHORIZED';
+    case 403:
+      return 'FORBIDDEN';
+    case 404:
+      return 'NOT_FOUND';
+    case 409:
+      return 'CONFLICT';
+    default:
+      return status >= 400 && status < 500 ? 'VALIDATION_ERROR' : 'INTERNAL_ERROR';
+  }
+}
+
 export async function buildApp(opts: BuildAppOptions = {}) {
   const env = loadEnv();
 
@@ -227,38 +246,30 @@ export async function buildApp(opts: BuildAppOptions = {}) {
   app.setErrorHandler((err, req, reply) => {
     // Use structured error observability for classification and metrics
     const classified = handleErrorWithObservability(err as Error | FastifyError, req, reply);
+    // The taxonomy code (classified.code, e.g. SEC_AUTHENTICATION / APP_VALIDATION)
+    // is for INTERNAL metrics/logging only. API consumers get the documented
+    // semantic ErrorCode derived from the HTTP status (or the AppError's own code).
+    const semanticCode = semanticCodeForStatus(classified.httpStatus);
 
-    // Zod validation errors - return validation details
+    // Zod validation errors - return field-level details
     if (err instanceof ZodError) {
       const details = err.issues.map((i) => ({ path: i.path, message: i.message }));
       return reply
         .status(classified.httpStatus)
-        .send(fail({ code: classified.code, message: classified.message, details }));
+        .send(fail({ code: 'VALIDATION_ERROR', message: classified.message, details }));
     }
 
-    // Our typed errors - return with full details
+    // Our typed errors - return the AppError's own code/message + details
     if (err instanceof AppError) {
       return reply
         .status(classified.httpStatus)
-        .send(fail({ code: classified.code, message: classified.message, details: err.details }));
+        .send(fail({ code: err.code, message: err.message, details: err.details }));
     }
 
-    // Fastify schema validation (AJV) lands here with statusCode
-    const statusCode =
-      typeof (err as { statusCode?: unknown }).statusCode === 'number'
-        ? (err as { statusCode: number }).statusCode
-        : 500;
-
-    if (statusCode >= 400 && statusCode < 500) {
-      return reply
-        .status(classified.httpStatus)
-        .send(fail({ code: classified.code, message: classified.message }));
-    }
-
-    // Return classified error response
+    // Fastify (AJV) schema validation + any other framework/generic error
     return reply
       .status(classified.httpStatus)
-      .send(fail({ code: classified.code, message: classified.message }));
+      .send(fail({ code: semanticCode, message: classified.message }));
   });
 
   registerRoutes(app);

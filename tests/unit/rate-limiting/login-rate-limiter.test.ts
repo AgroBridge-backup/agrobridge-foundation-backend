@@ -93,7 +93,7 @@ describe('LoginRateLimiter', () => {
   });
 
   describe('resetForIp', () => {
-    it('should clear all tracking for an IP', () => {
+    it('should clear all tracking for an IP', async () => {
       const ip = '192.168.1.8';
 
       // Record some attempts
@@ -104,8 +104,8 @@ describe('LoginRateLimiter', () => {
       // Verify attempts recorded
       expect(limiter.checkLimit(ip).totalAttempts).toBe(3);
 
-      // Reset
-      limiter.resetForIp(ip);
+      // Reset (async — must be awaited; resetForIp takes a lock)
+      await limiter.resetForIp(ip);
 
       // Verify cleared
       const result = limiter.checkLimit(ip);
@@ -114,7 +114,7 @@ describe('LoginRateLimiter', () => {
       expect(result.totalAttempts).toBe(0);
     });
 
-    it('should unblock a blocked IP', () => {
+    it('should unblock a blocked IP', async () => {
       const ip = '192.168.1.9';
 
       // Block the IP
@@ -124,7 +124,7 @@ describe('LoginRateLimiter', () => {
       expect(limiter.checkLimit(ip).allowed).toBe(false);
 
       // Reset
-      limiter.resetForIp(ip);
+      await limiter.resetForIp(ip);
 
       // Should be allowed again
       expect(limiter.checkLimit(ip).allowed).toBe(true);

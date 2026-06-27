@@ -294,7 +294,10 @@ describe('ContactService XSS Prevention', () => {
     const service = new ContactService(mockRepo as any);
     
     await service.create({
-      name: '<svg onload=alert(1)>John',
+      // Legit text + an XSS payload: the legit text survives sanitization so
+      // the service stores a clean name (the behavior under test). A pure-XSS
+      // name would sanitize to empty and hit unrelated empty-message validation.
+      name: 'John <svg onload=alert(1)>',
       email: 'john@example.com',
       message: 'Normal message',
     });
@@ -336,7 +339,10 @@ describe('ContactService XSS Prevention', () => {
     await service.create({
       name: 'Test',
       email: 'test@example.com',
-      message: '<script>alert(1)</script>',
+      // Legit text + XSS payload: survives sanitization (non-empty) while still
+      // triggering XSS detection/logging. A pure-<script> message sanitizes to
+      // empty and is rejected by message validation before the assertion runs.
+      message: 'Hello world <img src=x onerror=alert(1)>',
     });
 
     expect(consoleSpy).toHaveBeenCalledWith(
