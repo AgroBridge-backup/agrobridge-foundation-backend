@@ -254,8 +254,10 @@ export class AutoResponseSystem {
     const entry: BlockedIPEntry = {
       ip,
       blockedAt: new Date(),
-      expiresAt: duration > 0 ? new Date(Date.now() + duration) : undefined,
-      reason: event?.details?.ruleName ?? 'Unknown' || anomaly?.type ?? 'Unknown' || 'Unknown threat',
+      // exactOptionalPropertyTypes: omit expiresAt when absent rather than
+      // assigning undefined.
+      ...(duration > 0 ? { expiresAt: new Date(Date.now() + duration) } : {}),
+      reason: (event?.details?.ruleName as string | undefined) || anomaly?.type || 'Unknown threat',
       eventId: event?.id || anomaly?.id || 'unknown',
       blockedBy: 'auto'
     };
@@ -291,7 +293,7 @@ export class AutoResponseSystem {
       ip,
       requiredAt: new Date(),
       expiresAt: new Date(Date.now() + duration),
-      reason: event?.details?.ruleName ?? 'Unknown' || anomaly?.type ?? 'Unknown' || 'Suspicious activity'
+      reason: (event?.details?.ruleName as string | undefined) || anomaly?.type || 'Suspicious activity'
     };
 
     const key = `security:captcha_required:${ip}`;
@@ -323,8 +325,8 @@ export class AutoResponseSystem {
       entityId,
       entityType,
       enabledAt: new Date(),
-      expiresAt: duration > 0 ? new Date(Date.now() + duration) : undefined,
-      reason: event?.details?.ruleName ?? 'Unknown' || anomaly?.type ?? 'Unknown' || 'Security investigation',
+      ...(duration > 0 ? { expiresAt: new Date(Date.now() + duration) } : {}),
+      reason: (event?.details?.ruleName as string | undefined) || anomaly?.type || 'Security investigation',
       eventId: event?.id || anomaly?.id || 'unknown'
     };
 
@@ -359,7 +361,7 @@ export class AutoResponseSystem {
     const throttleConfig = {
       maxRequests: 10, // Significantly reduced
       windowMs: 60000, // Per minute
-      reason: event?.details?.ruleName ?? 'Unknown' || anomaly?.type ?? 'Unknown' || 'Rate limit evasion'
+      reason: event?.details?.ruleName || anomaly?.type || 'Rate limit evasion'
     };
 
     await this.redis.setEx(key, Math.floor(duration / 1000), JSON.stringify(throttleConfig));
@@ -505,7 +507,7 @@ export class AutoResponseSystem {
       high: 3,
       critical: 4
     };
-    return severityRank[eventSeverity] >= severityRank[threshold];
+    return (severityRank[eventSeverity] ?? 0) >= (severityRank[threshold] ?? 0);
   }
 
   /**

@@ -570,7 +570,7 @@ export class AnomalyDetector {
     await this.redis.setEx(key, 86400, JSON.stringify(anomaly));
     
     // Add to indices
-    await this.redis.zAdd('anomaly:timeline', anomaly.timestamp.getTime(), anomaly.id);
+    await this.redis.zAdd('anomaly:timeline', [{ score: anomaly.timestamp.getTime(), value: anomaly.id }]);
     await this.redis.sAdd(`anomaly:type:${anomaly.type}`, anomaly.id);
     await this.redis.sAdd(`anomaly:entity:${anomaly.entityId}`, anomaly.id);
   }
@@ -603,7 +603,8 @@ export class AnomalyDetector {
       .sort((a, b) => a - b);
 
     const lastTwo = timestamps.slice(-2);
-    return lastTwo[1] - lastTwo[0];
+    if (lastTwo.length < 2) return 0;
+    return lastTwo[1]! - lastTwo[0]!;
   }
 
   /**
@@ -684,7 +685,7 @@ export class AnomalyDetector {
   private calculateTimesBetweenRequests(requests: RequestMetrics[]): number[] {
     const times: number[] = [];
     for (let i = 1; i < requests.length; i++) {
-      times.push(requests[i].timestamp.getTime() - requests[i - 1].timestamp.getTime());
+      times.push(requests[i]!.timestamp.getTime() - requests[i - 1]!.timestamp.getTime());
     }
     return times;
   }
@@ -790,13 +791,13 @@ export class AnomalyDetector {
     } else if (options?.type) {
       ids = await this.redis.sMembers(`anomaly:type:${options.type}`);
     } else {
-      ids = await this.redis.zRevRange('anomaly:timeline', 0, limit - 1);
+      ids = await this.redis.zRange('anomaly:timeline', 0, limit - 1, { REV: true });
     }
 
     for (const id of ids.slice(0, limit)) {
       const keys = await this.redis.keys(`anomaly:detected:*:${id}`);
       if (keys.length > 0) {
-        const data = await this.redis.get(keys[0]);
+        const data = await this.redis.get(keys[0]!);
         if (data) {
           const anomaly = JSON.parse(data) as Anomaly;
           if (options?.severity && anomaly.severity !== options.severity) continue;
