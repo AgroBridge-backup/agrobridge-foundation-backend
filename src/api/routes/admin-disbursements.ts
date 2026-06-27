@@ -2,9 +2,11 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
 import { requireAdmin, requireSuperAdmin } from '../../auth/jwt.js';
+import { AppError } from '../../errors/app-error.js';
 import { ok, fail } from '../../http/response.js';
 import { DisbursementRepository } from '../../repositories/disbursement-repo.js';
 import {
+  assertDisbursementLinesAreDisbursable,
   createDisbursementBodySchema,
   listDisbursementsQuerySchema,
   updateDisbursementStatusBodySchema,
@@ -114,51 +116,6 @@ export async function adminDisbursementRoutes(app: FastifyInstance) {
       });
     }
 
-    // Money-safety guard: all linked donations must exist.
-    const donations = await app.prisma.donation.findMany({
-      where: { id: { in: donationIds } },
-      select: { id: true, amount: true, currency: true, status: true },
-    });
-    if (donations.length !== donationIds.length) {
-      reply.status(400);
-      return fail({
-        code: 'VALIDATION_ERROR',
-        message: 'One or more donationIds do not exist',
-      });
-    }
-
-    const donationById = new Map(donations.map((d) => [d.id, d]));
-
-    // Money-safety guards per line.
-    for (const line of body.lines) {
-      const donation = donationById.get(line.donationId);
-      if (!donation) {
-        reply.status(400);
-        return fail({ code: 'VALIDATION_ERROR', message: `Donation ${line.donationId} not found` });
-      }
-      if (donation.currency.toLowerCase() !== body.currency.toLowerCase()) {
-        reply.status(400);
-        return fail({
-          code: 'VALIDATION_ERROR',
-          message: `Donation ${line.donationId} currency (${donation.currency}) does not match disbursement currency (${body.currency})`,
-        });
-      }
-      if (donation.status !== 'SUCCEEDED') {
-        reply.status(400);
-        return fail({
-          code: 'VALIDATION_ERROR',
-          message: `Donation ${line.donationId} is not SUCCEEDED (current: ${donation.status}); only SUCCEEDED donations may be disbursed`,
-        });
-      }
-      if (line.appliedAmount > donation.amount) {
-        reply.status(400);
-        return fail({
-          code: 'VALIDATION_ERROR',
-          message: `Applied amount for donation ${line.donationId} (${line.appliedAmount}) exceeds donation amount (${donation.amount})`,
-        });
-      }
-    }
-
     // NOTE: amount is intentionally NOT constrained to sum(appliedAmount) —
     // the real transfer may include fees/top-ups. See schema rationale.
 
@@ -167,19 +124,45 @@ export async function adminDisbursementRoutes(app: FastifyInstance) {
       body.status === 'COMPLETED' ? (body.disbursedAt ?? new Date()) : body.disbursedAt;
 
     const repo = new DisbursementRepository(app.prisma);
-    const created = await repo.create({
-      amount: body.amount,
-      currency: body.currency,
-      recipientName: body.recipientName,
-      recipientIdentifier: body.recipientIdentifier,
-      method: body.method,
-      status: body.status,
-      createdBy: payload.sub,
-      ...(body.externalReference ? { externalReference: body.externalReference } : {}),
-      ...(disbursedAt ? { disbursedAt } : {}),
-      ...(body.notes ? { notes: body.notes } : {}),
-      ...(body.metadata ? { metadata: body.metadata } : {}),
-      lines: body.lines,
+
+    // Atomic money-safety: validation + create run in ONE transaction so a
+    // donation cannot be soft-deleted, status-flipped, or already-disbursed
+    // between the read and the write (TOCTOU). AppErrors thrown inside the
+    // callback roll back the transaction and surface via the global error
+    // handler with the correct status (400 / 409).
+    const created = await app.prisma.$transaction(async (tx) => {
+      // deletedAt: null guards against disbursing a soft-deleted donation.
+      const donations = await tx.donation.findMany({
+        where: { id: { in: donationIds }, deletedAt: null },
+        select: { id: true, amount: true, currency: true, status: true },
+      });
+      if (donations.length !== donationIds.length) {
+        throw new AppError({
+          statusCode: 400,
+          code: 'VALIDATION_ERROR',
+          message: 'One or more donationIds do not exist or have been deleted',
+        });
+      }
+
+      assertDisbursementLinesAreDisbursable(body.lines, donations, body.currency);
+
+      return repo.create(
+        {
+          amount: body.amount,
+          currency: body.currency,
+          recipientName: body.recipientName,
+          recipientIdentifier: body.recipientIdentifier,
+          method: body.method,
+          status: body.status,
+          createdBy: payload.sub,
+          ...(body.externalReference ? { externalReference: body.externalReference } : {}),
+          ...(disbursedAt ? { disbursedAt } : {}),
+          ...(body.notes ? { notes: body.notes } : {}),
+          ...(body.metadata ? { metadata: body.metadata } : {}),
+          lines: body.lines,
+        },
+        tx,
+      );
     });
 
     reply.status(201);
@@ -188,9 +171,15 @@ export async function adminDisbursementRoutes(app: FastifyInstance) {
 
   // =========================================================================
   // UPDATE DISBURSEMENT STATUS (Super Admin only)
+  //
+  // The state machine (legal transitions), disbursedAt bookkeeping, and the
+  // append-only statusHistory audit trail all live in
+  // DisbursementRepository.updateStatus, which runs them atomically in a single
+  // transaction. `by` is the super-admin's id from the JWT, recorded on every
+  // transition. Illegal transitions throw a 409 CONFLICT.
   // =========================================================================
   app.patch('/admin/disbursements/:id/status', async (req, reply) => {
-    await requireAdmin(req);
+    const payload = await requireAdmin(req);
     requireSuperAdmin(req);
 
     const { id } = req.params as { id: string };
@@ -211,17 +200,7 @@ export async function adminDisbursementRoutes(app: FastifyInstance) {
     }
 
     const repo = new DisbursementRepository(app.prisma);
-    const existing = await repo.findById(id);
-    if (!existing) {
-      reply.status(404);
-      return fail({ code: 'NOT_FOUND', message: 'Disbursement not found' });
-    }
-
-    // Stamp disbursedAt when transitioning to COMPLETED (if not already set).
-    const stamp =
-      bodyResult.data.status === 'COMPLETED' ? (existing.disbursedAt ?? new Date()) : undefined;
-
-    const updated = await repo.updateStatus(id, bodyResult.data.status, stamp);
+    const updated = await repo.updateStatus(id, bodyResult.data.status, { by: payload.sub });
 
     return ok(updated);
   });

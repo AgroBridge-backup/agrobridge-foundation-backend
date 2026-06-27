@@ -230,6 +230,9 @@ model Disbursement {
   externalReference   String?            @db.VarChar(255)
   status              DisbursementStatus @default(PENDING)
   disbursedAt         DateTime?
+  // Append-only audit trail of status rewrites: [{from, to, at, by}].
+  // Treated as [] when null (read-modify-write on every transition).
+  statusHistory       Json?
   notes               String?
   metadata            Json?
   createdBy           String?            @db.Uuid // AdminUser.id who entered it
