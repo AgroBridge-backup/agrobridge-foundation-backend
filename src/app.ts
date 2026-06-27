@@ -20,8 +20,9 @@ import { fail } from './http/response.js';
 import { requestContext } from './observability/request-context.js';
 import { semconv } from './observability/semconv.js';
 import { handleErrorWithObservability } from './middleware/error-observability.js';
-import { connectRedis, disconnectRedis } from './cache/redis-client.js';
+import { connectRedis, disconnectRedis, getRedisClient } from './cache/redis-client.js';
 import { rateLimitMiddleware } from './rate-limiting/middleware.js';
+import { createRedisBackedRateLimitStore } from './rate-limiting/fastify-rate-limit-redis-store.js';
 
 export type BuildAppOptions = {
   logger?: FastifyBaseLogger | boolean;
@@ -101,11 +102,20 @@ export async function buildApp(opts: BuildAppOptions = {}) {
     credentials: true,
   });
 
+  // Global rate-limit cap, now backed by Redis so it is shared across instances
+  // (previously in-memory/per-instance only). The custom store is required
+  // because @fastify/rate-limit's built-in RedisStore is ioredis-only; this repo
+  // uses node-redis (see fastify-rate-limit-redis-store.ts).
+  // skipOnError keeps the site available if Redis hiccups — the per-route tiered
+  // limiter (rateLimitMiddleware) still enforces real protection independently.
+  const rateLimitStore = createRedisBackedRateLimitStore(getRedisClient(env));
   app.register(rateLimit, {
     max: 200,
     timeWindow: '1 minute',
     // Disable in tests to avoid injecting surprises
     global: env.NODE_ENV !== 'test',
+    store: rateLimitStore,
+    skipOnError: true,
   });
 
   app.register(cookie, {
