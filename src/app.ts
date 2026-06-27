@@ -22,6 +22,7 @@ import { semconv } from './observability/semconv.js';
 import { handleErrorWithObservability } from './middleware/error-observability.js';
 import { connectRedis, disconnectRedis } from './cache/redis-client.js';
 import { rateLimitMiddleware } from './rate-limiting/middleware.js';
+import { configureFounderNotifier } from './observability/founder-notifier.js';
 
 export type BuildAppOptions = {
   logger?: FastifyBaseLogger | boolean;
@@ -54,6 +55,10 @@ export async function buildApp(opts: BuildAppOptions = {}) {
   );
 
   app.decorate('env', env);
+
+  // Founder notifications: page on critical errors if a webhook is configured.
+  // No-op when FOUNDER_NOTIFY_WEBHOOK_URL is unset (dev/test).
+  configureFounderNotifier(env.FOUNDER_NOTIFY_WEBHOOK_URL);
 
   const prisma = createPrismaClient();
   app.decorate('prisma', prisma);
