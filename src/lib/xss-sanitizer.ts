@@ -226,17 +226,6 @@ export function detectXssPatterns(input: string): {
 }
 
 /**
- * Quick check for XSS patterns
- * 
- * @param input - String to check
- * @returns True if XSS patterns detected
- */
-function containsXssPatterns(input: string): boolean {
-  const detection = detectXssPatterns(input);
-  return detection.hasXss;
-}
-
-/**
  * Validates email address for XSS attempts in the local part
  * 
  * Email addresses can be attack vectors when displayed in admin panels.
