@@ -121,20 +121,26 @@ export async function buildApp(opts: BuildAppOptions = {}) {
     },
   });
 
-  // JWT Secret Rotation: If a previous secret is configured, wrap jwtVerify
-  // to try the current secret first, then fall back to the previous one.
-  // This allows a zero-downtime rotation window where old tokens still work.
+  // JWT Secret Rotation (zero-downtime): register a SECOND verifier bound to
+  // the previous secret on the `previous` namespace. This decorates
+  // `req.previousJwtVerify()` (reading the SAME `ab_admin` cookie) so that
+  // `requireAdmin` and `/auth/refresh` can accept tokens issued before the
+  // rotation. Clients naturally migrate to current-secret tokens via refresh.
+  //
+  // Why a namespaced instance (not a monkeypatch): in @fastify/jwt v10,
+  // `req.jwtVerify()` is decorated to a closure-captured `fast-jwt` verifier
+  // created at registration. It does NOT call `app.jwt.verify`, so patching
+  // `app.jwt.verify` (as a prior implementation did) had no effect on request
+  // verification. The namespace is the supported multi-secret mechanism.
   if (env.JWT_SECRET_PREVIOUS) {
-    const originalVerify = app.jwt.verify.bind(app.jwt);
-    (app.jwt as any).verify = (token: string, opts?: any) => {
-      try {
-        return originalVerify(token, opts);
-      } catch {
-        // Try previous secret for tokens issued before rotation
-        const jwtModule = require('jsonwebtoken');
-        return jwtModule.verify(token, env.JWT_SECRET_PREVIOUS, opts);
-      }
-    };
+    app.register(jwt, {
+      namespace: 'previous',
+      secret: env.JWT_SECRET_PREVIOUS,
+      cookie: {
+        cookieName: 'ab_admin',
+        signed: true,
+      },
+    });
   }
 
   await app.register(rawBody, {
