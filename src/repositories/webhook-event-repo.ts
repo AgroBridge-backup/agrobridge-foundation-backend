@@ -12,7 +12,7 @@ export class WebhookEventRepository {
       operation: 'create',
       fn: async () => {
         try {
-          const created = await this.prisma.webhookEvent.create({
+          await this.prisma.webhookEvent.create({
             data: {
               id: input.id,
               type: input.type,
@@ -20,12 +20,20 @@ export class WebhookEventRepository {
               processed: false,
             },
           });
-          return { created, alreadyProcessed: false };
+          return { created: true, alreadyProcessed: false };
         } catch (err) {
-          // Unique constraint violation -> idempotent ack
+          // Unique constraint violation -> the event row already exists. It is
+          // NOT safe to assume it was processed: a prior attempt may have
+          // crashed after inserting the row but before completing (and
+          // committing) the work. Read the actual processed flag so the caller
+          // can re-process an unfinished event on Stripe's retry.
           const code = (err as { code?: string }).code;
           if (code === 'P2002') {
-            return { created: null, alreadyProcessed: true } as const;
+            const existing = await this.prisma.webhookEvent.findUnique({
+              where: { id: input.id },
+              select: { processed: true },
+            });
+            return { created: false, alreadyProcessed: Boolean(existing?.processed) };
           }
           throw err;
         }
