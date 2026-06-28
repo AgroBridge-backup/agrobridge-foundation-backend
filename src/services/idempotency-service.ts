@@ -3,6 +3,7 @@ import type { RedisClientType } from 'redis';
 
 import { getRedisClient } from '../cache/redis-client.js';
 import { loadEnv } from '../config/env.js';
+import { Errors } from '../errors/app-error.js';
 import { requestContext } from '../observability/request-context.js';
 
 /**
@@ -36,11 +37,13 @@ export class IdempotencyService {
     private redis: RedisClientType | null = null;
 
     private getRedis(): RedisClientType | null {
-        if (this.redis) return this.redis;
         try {
-            const env = loadEnv();
-            this.redis = getRedisClient(env);
-            return this.redis;
+            if (!this.redis) this.redis = getRedisClient(loadEnv());
+            // node-redis exposes .isOpen reflecting the live connection state.
+            // Only treat the store as available when actually connected, so an
+            // outage fails CLOSED (see execute) instead of running the money
+            // path without dedupe protection.
+            return this.redis.isOpen ? this.redis : null;
         } catch {
             return null;
         }
@@ -61,12 +64,12 @@ export class IdempotencyService {
         const log = requestContext.getLog();
         const redis = this.getRedis();
 
-        // If Redis is unavailable, fall through to direct execution
-        // (fail-open: better to risk a duplicate than reject valid requests)
+        // Fail CLOSED: on a money endpoint, executing without dedupe when the
+        // store is declared-but-unavailable risks duplicate Stripe sessions.
+        // Return 503 (via the thrown AppError) so the client retries instead.
         if (!redis) {
-            log?.warn('Idempotency: Redis unavailable, executing without protection');
-            const result = await handler();
-            return { cached: false, ...result };
+            log?.warn('Idempotency: store unavailable — refusing to execute (fail-closed)');
+            throw Errors.serviceUnavailable('Payment processing temporarily unavailable');
         }
 
         const redisKey = `idempotency:${key}`;

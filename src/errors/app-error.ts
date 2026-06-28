@@ -4,7 +4,8 @@ export type ErrorCode =
   | 'FORBIDDEN'
   | 'NOT_FOUND'
   | 'CONFLICT'
-  | 'INTERNAL_ERROR';
+  | 'INTERNAL_ERROR'
+  | 'SERVICE_UNAVAILABLE';
 
 export class AppError extends Error {
   readonly statusCode: number;
@@ -29,4 +30,6 @@ export const Errors = {
   conflict: (message = 'Conflict') => new AppError({ statusCode: 409, code: 'CONFLICT', message }),
   internal: () =>
     new AppError({ statusCode: 500, code: 'INTERNAL_ERROR', message: 'Internal server error' }),
+  serviceUnavailable: (message = 'Service unavailable') =>
+    new AppError({ statusCode: 503, code: 'SERVICE_UNAVAILABLE', message }),
 };
