@@ -16,6 +16,8 @@ enum DonationStatus {
   SUCCEEDED
   EXPIRED
   REFUNDED
+  DISPUTED
+  FAILED
 }
 
 enum DonationType {
