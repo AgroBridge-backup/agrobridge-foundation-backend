@@ -447,6 +447,22 @@ function classifyInfrastructureError(
 }
 
 /**
+ * Resolve a bounded-cardinality endpoint label for metrics.
+ *
+ * `req.url` carries path parameters and query strings (which can include PII and
+ * produces unbounded label cardinality). Prefer the matched route template
+ * (`req.routeOptions.url`, e.g. `/api/admin/contacts/:id`); fall back to the
+ * path with the query stripped for unmatched (404) requests.
+ */
+function normalizeEndpoint(req: FastifyRequest): string {
+  const route = req.routeOptions?.url;
+  if (route) return route;
+  const url = req.url ?? '/';
+  const queryIndex = url.indexOf('?');
+  return queryIndex >= 0 ? url.slice(0, queryIndex) : url;
+}
+
+/**
  * Handle error with full observability
  * This is the main entry point for error handling
  */
@@ -461,7 +477,7 @@ export function handleErrorWithObservability(
   const userAgent = req.headers['user-agent'];
   const context: ErrorContext = {
     requestId: req.id,
-    endpoint: req.url,
+    endpoint: normalizeEndpoint(req),
     method: req.method,
     userId: (req.user as any)?.id,
     userType: req.user ? 'authenticated' : 'anonymous',
