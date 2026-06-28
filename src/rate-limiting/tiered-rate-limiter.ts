@@ -11,6 +11,7 @@ import { requestContext } from '../observability/request-context.js';
 import { RateLimitStore } from './rate-limit-store.js';
 import { InMemoryRateLimitStore } from './in-memory-rate-limit-store.js';
 import { getRedisClient } from '../cache/redis-client.js';
+import { hashForTelemetry } from '../lib/telemetry-redaction.js';
 import { loadEnv } from '../config/env.js';
 import { RedisRateLimitStore } from './redis-rate-limit-store.js';
 import * as metrics from '../observability/metrics/rate-limiting-metrics.js';
@@ -56,7 +57,9 @@ export class TieredRateLimiter {
       {
         attributes: {
           'rate_limit.tier': tier,
-          'rate_limit.identifier': identifier,
+          // identifier contains the raw client IP; hash it so the span never
+          // carries PII to the telemetry backend (still allows correlation).
+          'rate_limit.identifier': hashForTelemetry(identifier),
         },
       },
       async (span) => {

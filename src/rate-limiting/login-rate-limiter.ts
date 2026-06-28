@@ -5,6 +5,8 @@ import { Counter, Histogram } from 'prom-client';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 
+import { hashForTelemetry } from '../lib/telemetry-redaction.js';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
@@ -204,7 +206,8 @@ export class LoginRateLimiter {
 
     return tracer.startActiveSpan('login_rate_limit.atomic_check', async (span) => {
       try {
-        span.setAttribute('login_rate_limit.ip', ip);
+        // ip is PII; emit only a non-reversible hash digest for correlation.
+        span.setAttribute('login_rate_limit.ip', hashForTelemetry(ip));
         span.setAttribute('login_rate_limit.record_failure', recordFailure);
 
         let result: RateLimitResult;
