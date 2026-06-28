@@ -161,6 +161,7 @@ export async function adminContactRoutes(app: FastifyInstance) {
   // =========================================================================
   app.patch('/admin/contacts/:id', async (req, reply) => {
     const payload = await requireAdmin(req);
+    requireSuperAdmin(req);
     setAdminSecurityHeaders(reply);
 
     const { id } = req.params as { id: string };
