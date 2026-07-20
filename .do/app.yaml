@@ -1,0 +1,87 @@
+# DigitalOcean App Platform spec — foundation-api (api.agrobridgefoundation.org)
+#
+# Create:  doctl apps create --spec .do/app.yaml   (deploys `ship/integration`)
+# Update:  doctl apps update <APP_ID> --spec .do/app.yaml
+#
+# CHANGE_ME__* values are filled at create time (local copy of this spec, or
+# dashboard → Settings → Environment Variables) — never committed. Shared
+# ecosystem infra (the agrobridge-pg Postgres cluster) is bootstrapped by
+# ~/Documents/faro-backend/docs/DEPLOY_DIGITALOCEAN.md §1.
+#
+# Migrations run inside render-start.sh at container start (prisma migrate
+# deploy, then the server) — no separate pre-deploy job.
+#
+# BOOT REQUIREMENT: env.ts hard-requires STRIPE_SECRET_KEY,
+# STRIPE_WEBHOOK_SECRET and STRIPE_API_VERSION — the app will not start
+# without real values. Per CLAUDE.md, do NOT enable live Stripe webhooks
+# until the service is stable; use test-mode keys for first boot.
+#
+# Redis intentionally unset: /api/health only checks the DB, and rate
+# limiting falls back to in-memory. The frontend config still points at the
+# dead onrender.com URL — updating agrobridge-foundation-web to
+# https://api.agrobridgefoundation.org is a separate follow-up.
+name: foundation-api
+region: sfo
+alerts:
+  - rule: DEPLOYMENT_FAILED
+domains:
+  - domain: api.agrobridgefoundation.org
+    type: PRIMARY
+services:
+  - name: web
+    github:
+      repo: AgroBridge-backup/agrobridge-foundation-backend
+      branch: ship/integration
+      deploy_on_push: true
+    dockerfile_path: Dockerfile
+    source_dir: /
+    http_port: 10000
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-0.5gb
+    health_check:
+      http_path: /api/health
+      initial_delay_seconds: 30
+      period_seconds: 10
+      timeout_seconds: 5
+      failure_threshold: 6
+    envs:
+      - key: NODE_ENV
+        scope: RUN_TIME
+        value: production
+      # postgres://foundation:PASS@HOST:25060/foundation?sslmode=no-verify
+      # sslmode=no-verify REQUIRED: this app uses @prisma/adapter-pg
+      # (node-postgres), which — unlike the Prisma engine — verifies the CA
+      # on sslmode=require, and DO's CA is private. no-verify encrypts
+      # without CA validation (same trade-off as faro-backend).
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        type: SECRET
+        value: CHANGE_ME__DATABASE_URL
+      # Shared 1GB cluster (~22 backend conns total across 5 apps) — keep low
+      - key: DB_POOL_MAX
+        scope: RUN_TIME
+        value: "3"
+      # openssl rand -hex 32 each, distinct
+      - key: JWT_SECRET
+        scope: RUN_TIME
+        type: SECRET
+        value: CHANGE_ME__GENERATE
+      - key: COOKIE_SECRET
+        scope: RUN_TIME
+        type: SECRET
+        value: CHANGE_ME__GENERATE
+      # Boot-required Stripe config (test-mode keys until service is stable)
+      - key: STRIPE_SECRET_KEY
+        scope: RUN_TIME
+        type: SECRET
+        value: CHANGE_ME__ALEJANDRO
+      - key: STRIPE_WEBHOOK_SECRET
+        scope: RUN_TIME
+        type: SECRET
+        value: CHANGE_ME__ALEJANDRO
+      - key: STRIPE_API_VERSION
+        scope: RUN_TIME
+        value: "2024-01-01"
+      - key: CORS_ORIGIN
+        scope: RUN_TIME
+        value: https://www.agrobridgefoundation.org,https://agrobridgefoundation.org
