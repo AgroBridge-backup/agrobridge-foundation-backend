@@ -172,3 +172,7 @@ npm run dev                    # http://localhost:3000
 ## Author
 
 Alejandro Navarro Ayala - CEO & Founder, AgroBridge
+
+## Ship to production (status 2026-07-17)
+
+**NOT LIVE.** The Render service URL `agrobridge-foundation-api.onrender.com` answers `x-render-routing: no-server` — the service exists in config/docs but is not running (suspended or never deployed). Go-live: deploy on Render (Docker) → env via dashboard → Prisma migrate against prod DB → verify the documented health path `/api/health` returns 200 → wire `admin.agrobridgefoundation.org` / the live foundation web only after that. Stripe webhooks are documented to point at this API — do NOT enable live Stripe webhooks until the service is stable.
