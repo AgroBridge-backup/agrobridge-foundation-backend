@@ -15,7 +15,7 @@ export type DonationListSort = {
 };
 
 export class DonationRepository {
-  constructor(private readonly prisma: PrismaClient) {}
+  constructor(private readonly prisma: PrismaClient) { }
 
   createPending(input: {
     amount: number;
@@ -72,6 +72,118 @@ export class DonationRepository {
         this.prisma.donation.updateMany({
           where: { stripeSessionId },
           data: { status },
+        }),
+    });
+  }
+
+  /**
+   * Atomic transaction: claim the webhook event (processed false→true) and
+   * update the donation status. Claiming FIRST inside the same transaction
+   * gives exact-once semantics under Stripe's at-least-once redelivery: if a
+   * prior attempt crashed, processed stayed false and the event row still
+   * exists, so createIfNotExists reports it as not-yet-processed and this
+   * method re-runs; concurrent/redundant runs that find processed already true
+   * skip via claim.count === 0. A crash rolls back claim + work together.
+   *
+   * `stripeSubscriptionId` is optionally captured when a checkout completes in
+   * subscription mode, so subsequent renewals (invoice.paid) can be linked back.
+   */
+  transactionalStatusUpdate(
+    stripeSessionId: string,
+    status: DonationStatus,
+    webhookEventId: string,
+    stripeSubscriptionId?: string,
+  ) {
+    return withDbSpan({
+      name: 'db.donation.transactional_status_update',
+      model: 'Donation',
+      operation: 'transaction',
+      fn: async () =>
+        this.prisma.$transaction(async (tx) => {
+          const claim = await tx.webhookEvent.updateMany({
+            where: { id: webhookEventId, processed: false },
+            data: { processed: true },
+          });
+          if (claim.count === 0) return; // already processed by another run
+          await tx.donation.updateMany({
+            where: { stripeSessionId },
+            data: {
+              status,
+              ...(stripeSubscriptionId ? { stripeSubscriptionId } : {}),
+            },
+          });
+        }),
+    });
+  }
+
+  /**
+   * Find the original (oldest) donation for a Stripe subscription. Used to
+   * link a renewal's donor/campaign back to the originating checkout.
+   */
+  findByStripeSubscriptionId(subscriptionId: string) {
+    return withDbSpan({
+      name: 'db.donation.find_by_subscription',
+      model: 'Donation',
+      operation: 'findFirst',
+      fn: async () =>
+        this.prisma.donation.findFirst({
+          where: { stripeSubscriptionId: subscriptionId, deletedAt: null },
+          orderBy: { createdAt: 'asc' },
+        }),
+    });
+  }
+
+  /**
+   * Atomic: claim the webhook event (processed false→true) and create a
+   * SUCCEEDED recurring Donation for a renewal (invoice.paid). Same exact-once
+   * claim discipline as transactionalStatusUpdate — a renewal is never created
+   * twice for the same invoice event, even across Stripe redelivery or worker
+   * crashes. Model A: each renewal is its own Donation row (type=RECURRING),
+   * inheriting donor/campaign from the original. The dashboard's totalRaised
+   * already sums all SUCCEEDED rows, so renewals are included automatically;
+   * donorCount uses DISTINCT(donorEmail), so repeat renewals do not inflate
+   * the donor count.
+   *
+   * Returns `{ alreadyProcessed: true }` when another run already handled the
+   * event (claim lost), so callers/tests can distinguish a fresh write.
+   */
+  createRenewal(
+    input: {
+      amount: number;
+      currency: string;
+      donorEmail?: string;
+      donorName?: string;
+      campaignId?: string;
+      stripeSubscriptionId?: string;
+      metadata?: Prisma.InputJsonValue;
+    },
+    webhookEventId: string,
+  ) {
+    return withDbSpan({
+      name: 'db.donation.create_renewal',
+      model: 'Donation',
+      operation: 'transaction',
+      fn: async () =>
+        this.prisma.$transaction(async (tx) => {
+          const claim = await tx.webhookEvent.updateMany({
+            where: { id: webhookEventId, processed: false },
+            data: { processed: true },
+          });
+          if (claim.count === 0) return { alreadyProcessed: true };
+          await tx.donation.create({
+            data: {
+              amount: input.amount,
+              currency: input.currency,
+              status: 'SUCCEEDED',
+              type: 'RECURRING',
+              donorEmail: input.donorEmail ?? null,
+              donorName: input.donorName ?? null,
+              campaignId: input.campaignId ?? null,
+              stripeSubscriptionId: input.stripeSubscriptionId ?? null,
+              metadata: input.metadata ?? Prisma.JsonNull,
+            },
+          });
+          return { alreadyProcessed: false };
         }),
     });
   }

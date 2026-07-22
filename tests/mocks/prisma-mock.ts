@@ -26,6 +26,7 @@ export function createMockPrismaClient() {
       findFirst: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
+      updateMany: vi.fn(),
     },
     $queryRaw: vi.fn(),
     $transaction: vi.fn(),

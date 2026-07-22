@@ -7,5 +7,21 @@ coverage
 .vitest
 .DS_Store
 prisma/dev.db
-prisma/migrations
+# prisma/migrations IS tracked — baseline migrations are required for
+# `prisma migrate deploy` in render-start.sh. See ENGINEERING.md §9.1.
 *.tgz
+
+# Backup/temp files
+*.bak
+*.bak*
+*.old
+*.tmp
+*.backup
+
+# Test output
+test-results/
+playwright-report/
+artifacts/
+
+# Logs
+*.log

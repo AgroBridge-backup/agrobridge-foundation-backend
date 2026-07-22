@@ -11,8 +11,8 @@
 
 | Metric         | Endpoint                  | Command                                        |
 | -------------- | ------------------------- | ---------------------------------------------- |
-| Health Check   | `/health/rate-limit`      | `curl localhost:8080/health/rate-limit`        |
-| Deep Health    | `/health/rate-limit/deep` | `curl localhost:8080/health/rate-limit/deep`   |
+| Health Check   | `/api/health/rate-limit`      | `curl localhost:3000/api/health/rate-limit` |
+| Deep Health (admin auth required) | `/api/health/rate-limit/deep` | `curl -H "Cookie: ab_admin=<signed-jwt>" localhost:3000/api/health/rate-limit/deep` |
 | Redis Ping     | Redis CLI                 | `redis-cli -h <host> -p <port> ping`           |
 | Redis Slow Log | Redis CLI                 | `redis-cli -h <host> -p <port> SLOWLOG GET 10` |
 | Redis Memory   | Redis CLI                 | `redis-cli -h <host> -p <port> INFO memory`    |
@@ -151,10 +151,10 @@ grep -i "rate limit" /var/log/agrobridge/app.log | tail -100
 
 ```bash
 # Check health endpoint
-curl http://localhost:8080/health/rate-limit
+curl http://localhost:3000/api/health/rate-limit
 
 # Check circuit breaker state
-curl http://localhost:8080/health/rate-limit/deep | jq '.details.circuitBreaker'
+curl http://localhost:3000/api/health/rate-limit/deep | jq '.details.circuitBreaker'
 
 # Check fallback rate
 rate(rate_limit_fallbacks_total[5m])
@@ -189,7 +189,7 @@ circuitBreakerThreshold: 10  # Increase to 10
 
 ```bash
 # Watch circuit breaker state
-watch -n 5 'curl -s http://localhost:8080/health/rate-limit/deep | jq ".details.circuitBreaker"'
+watch -n 5 'curl -s http://localhost:3000/api/health/rate-limit/deep | jq ".details.circuitBreaker"'
 
 # Circuit breaker auto-recovers after cooldown if next request succeeds
 ```
@@ -208,7 +208,7 @@ kubectl exec -it <pod> -- pkill -f node
 
 ```bash
 # Check if fallback is causing memory pressure
-curl http://localhost:8080/health/rate-limit/deep | jq '.details.system.memory'
+curl http://localhost:3000/api/health/rate-limit/deep | jq '.details.system.memory'
 
 # If memory > 1GB: Fallback may be overwhelmed
 # Consider increasing cleanup interval or adding more nodes
@@ -306,7 +306,7 @@ redis-cli -h <redis-host> -p <redis-port> SLOWLOG GET
 top -p <node-pid>
 
 # Check event loop lag (using Node.js metrics)
-curl http://localhost:8080/metrics | grep eventloop
+curl http://localhost:3000/metrics | grep eventloop
 ```
 
 #### Optimization Actions
@@ -376,7 +376,7 @@ grep -i "circuit breaker" /var/log/agrobridge/app.log | tail -50
 
 ```bash
 # Watch circuit breaker state
-watch -n 10 'curl -s http://localhost:8080/health/rate-limit/deep | jq ".circuitBreaker"'
+watch -n 10 'curl -s http://localhost:3000/api/health/rate-limit/deep | jq ".circuitBreaker"'
 
 # Circuit breaker should auto-close after:
 # - Cooldown period (60s) expires
@@ -471,7 +471,7 @@ watch -n 5 'redis-cli -h <redis-host> -p 6379 INFO memory | grep used_memory'
 kubectl rollout restart deployment/agrobridge-api
 
 # Option 2: Force close circuit breaker via API (if implemented)
-curl -X POST http://localhost:8080/admin/circuit-breaker/reset \
+curl -X POST http://localhost:3000/admin/circuit-breaker/reset \
   -H "Content-Type: application/json" \
   -d '{"store": "redis"}'
 

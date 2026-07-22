@@ -1,12 +1,14 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
-import { buildApp } from '../../src/app.js';
+import { buildApp } from '../../../src/app.js';
 import { setupTestDatabase, teardownTestDatabase } from '../../helpers/setup-db.js';
+import { setTestEnv } from '../../helpers/env.js';
 import type { FastifyInstance } from 'fastify';
 
 describe('Authentication Flow Integration Tests', () => {
   let app: FastifyInstance;
 
   beforeAll(async () => {
+    setTestEnv();
     await setupTestDatabase();
     app = await buildApp({ logger: false });
     await app.ready();
@@ -24,7 +26,9 @@ describe('Authentication Flow Integration Tests', () => {
   });
 
   afterAll(async () => {
-    await app.close();
+    if (app) {
+      await app.close();
+    }
     await teardownTestDatabase();
   });
 
@@ -41,7 +45,7 @@ describe('Authentication Flow Integration Tests', () => {
     expect(response.statusCode).toBe(200);
     const data = response.json();
     expect(data.ok).toBe(true);
-    expect(data.data.message).toBeDefined();
+    expect(data.data).toEqual({});
     expect(response.headers['set-cookie']).toBeDefined();
   });
 

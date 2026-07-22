@@ -1,0 +1,393 @@
+# Error Alerting Rules for AgroBridge Foundation
+# 
+# These rules define when SREs should be alerted based on error metrics
+# Deploy to Prometheus Alertmanager or Grafana Alerting
+#
+# Severity Levels:
+#   - critical: Immediate action required (page on-call)
+#   - warning:  Action required within business hours
+#   - info:     Monitor but no immediate action
+
+# Groups organize related alerts
+groups:
+  - name: infrastructure_errors
+    interval: 30s
+    rules:
+      # Critical: Database connection failures
+      - alert: DatabaseConnectionFailure
+        expr: |
+          sum(rate(error_rate_total{code="INFRA_DB_CONNECTION"}[2m])) > 0
+        for: 1m
+        labels:
+          severity: critical
+          category: infrastructure
+          team: sre
+        annotations:
+          summary: "Database connection failure detected"
+          description: |
+            Database connection failures are occurring at a rate of 
+            {{ $value }} errors per second.
+          runbook_url: "https://wiki.internal/runbooks/database-connection"
+          dashboard_url: "https://grafana.internal/d/agrobridge-errors"
+
+      # Critical: Database pool pressure / connection saturation.
+      # NOTE: Prisma has no distinct "pool exhausted" code — pool pressure
+      # surfaces as P2024 timeouts, classified to INFRA_DB_TIMEOUT (see
+      # src/middleware/error-observability.ts). INFRA_DB_POOL_EXHAUSTED was
+      # previously produced by a P2025 misclassification (now fixed), so this
+      # alert is retargeted to the actual signal. DatabaseTimeouts (below)
+      # covers the same code at a lower, sustained threshold.
+      - alert: DatabasePoolExhausted
+        expr: |
+          sum(rate(error_rate_total{code="INFRA_DB_TIMEOUT"}[1m])) > 1
+        for: 30s
+        labels:
+          severity: critical
+          category: infrastructure
+          team: sre
+        annotations:
+          summary: "Database pool pressure (timeouts spiking)"
+          description: |
+            Database connection timeouts exceed 1/s — the Prisma connection
+            pool is saturating. This may cause cascading failures across the
+            application. Consider raising DB_POOL_MAX or investigating slow
+            queries.
+          runbook_url: "https://wiki.internal/runbooks/db-pool-exhaustion"
+
+      # High: Database timeouts
+      - alert: DatabaseTimeouts
+        expr: |
+          sum(rate(error_rate_total{code="INFRA_DB_TIMEOUT"}[5m])) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+          category: infrastructure
+          team: sre
+        annotations:
+          summary: "Database query timeouts increasing"
+          description: |
+            Database query timeouts are occurring at {{ $value }} per second.
+            This may indicate slow queries or database overload.
+
+      # High: Redis connection failures
+      - alert: RedisConnectionFailure
+        expr: |
+          sum(rate(error_rate_total{code="INFRA_REDIS_CONNECTION"}[2m])) > 0.1
+        for: 1m
+        labels:
+          severity: warning
+          category: infrastructure
+          team: sre
+        annotations:
+          summary: "Redis connection issues detected"
+          description: |
+            Redis connection failures at {{ $value }} per second.
+            Cache operations may be falling back to database.
+
+      # SSL/TLS errors (security critical)
+      - alert: SSLError
+        expr: |
+          sum(rate(error_rate_total{code="INFRA_SSL_ERROR"}[1m])) > 0
+        for: 0s
+        labels:
+          severity: critical
+          category: infrastructure
+          team: sre
+        annotations:
+          summary: "SSL/TLS errors detected"
+          description: |
+            SSL/TLS handshake failures detected. This may indicate 
+            certificate issues or security problems.
+
+  - name: vendor_errors
+    interval: 30s
+    rules:
+      # Critical: Payment gateway failures
+      - alert: PaymentGatewayFailure
+        expr: |
+          sum(rate(error_rate_total{code="VENDOR_PAYMENT_GATEWAY"}[2m])) > 0
+        for: 1m
+        labels:
+          severity: critical
+          category: vendor
+          team: payments
+        annotations:
+          summary: "Payment gateway failures"
+          description: |
+            Payment gateway is failing at {{ $value }} per second.
+            Donations and payments cannot be processed.
+          impact: "Revenue impact - users cannot complete donations"
+
+      # High: Stripe API failures
+      - alert: StripeAPIFailure
+        expr: |
+          sum(rate(error_rate_total{category="VENDOR",code=~"VENDOR_STRIPE.*"}[5m])) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+          category: vendor
+          team: payments
+        annotations:
+          summary: "Stripe API errors increasing"
+          description: |
+            Stripe API errors at {{ $value }} per second.
+            May affect payment processing and webhooks.
+
+      # Stripe rate limiting
+      - alert: StripeRateLimit
+        expr: |
+          sum(rate(error_rate_total{code="VENDOR_STRIPE_RATE_LIMIT"}[5m])) > 0.01
+        for: 1m
+        labels:
+          severity: warning
+          category: vendor
+          team: payments
+        annotations:
+          summary: "Stripe rate limit approached"
+          description: |
+            Hitting Stripe rate limits. Review API usage patterns
+            and implement exponential backoff if needed.
+
+      # Medium: Email service failures
+      - alert: EmailServiceFailure
+        expr: |
+          sum(rate(error_rate_total{code="VENDOR_EMAIL_SERVICE"}[10m])) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          category: vendor
+          team: platform
+        annotations:
+          summary: "Email service errors"
+          description: |
+            Email service failures at {{ $value }} per second.
+            Users may not receive receipts or notifications.
+
+  - name: security_errors
+    interval: 10s
+    rules:
+      # Critical: SQL injection attempts
+      - alert: SQLInjectionAttempt
+        expr: |
+          sum(rate(error_rate_total{code="SEC_SQL_INJECTION"}[1m])) > 0
+        for: 0s
+        labels:
+          severity: critical
+          category: security
+          team: security
+        annotations:
+          summary: "SQL injection attack detected"
+          description: |
+            SQL injection attempts detected. Immediate security review required.
+          action: "Check WAF logs and consider IP blocking"
+
+      # Critical: Session hijacking
+      - alert: SessionHijackingAttempt
+        expr: |
+          sum(rate(error_rate_total{code="SEC_SESSION_HIJACKING"}[1m])) > 0
+        for: 0s
+        labels:
+          severity: critical
+          category: security
+          team: security
+        annotations:
+          summary: "Potential session hijacking"
+          description: |
+            Session hijacking indicators detected.
+            Review authentication logs immediately.
+
+      # High: XSS attempts
+      - alert: XSSAttempt
+        expr: |
+          sum(rate(error_rate_total{code="SEC_XSS_ATTEMPT"}[5m])) > 0.1
+        for: 1m
+        labels:
+          severity: warning
+          category: security
+          team: security
+        annotations:
+          summary: "XSS attack attempts detected"
+          description: |
+            Cross-site scripting attempts at {{ $value }} per minute.
+
+      # High: CSRF attempts
+      - alert: CSRFAttempt
+        expr: |
+          sum(rate(error_rate_total{code="SEC_CSRF_ATTEMPT"}[5m])) > 0.1
+        for: 1m
+        labels:
+          severity: warning
+          category: security
+          team: security
+        annotations:
+          summary: "CSRF attack attempts detected"
+          description: |
+            Cross-site request forgery attempts detected.
+
+      # Suspicious activity pattern
+      - alert: SuspiciousActivity
+        expr: |
+          sum(rate(error_rate_total{code="SEC_SUSPICIOUS_ACTIVITY"}[5m])) > 1
+        for: 2m
+        labels:
+          severity: warning
+          category: security
+          team: security
+        annotations:
+          summary: "Suspicious activity pattern"
+          description: |
+            Elevated suspicious activity at {{ $value }} per second.
+
+  - name: application_errors
+    interval: 30s
+    rules:
+      # High: Application code bugs
+      - alert: ApplicationBugs
+        expr: |
+          sum(rate(error_rate_total{code="APP_CODE_BUG"}[5m])) > 0.5
+        for: 3m
+        labels:
+          severity: warning
+          category: application
+          team: engineering
+        annotations:
+          summary: "Application errors elevated"
+          description: |
+            Application code errors at {{ $value }} per second.
+            Review recent deployments for potential issues.
+
+      # High: Resource exhaustion
+      - alert: ResourceExhausted
+        expr: |
+          sum(rate(error_rate_total{code="APP_RESOURCE_EXHAUSTED"}[2m])) > 0
+        for: 1m
+        labels:
+          severity: critical
+          category: application
+          team: engineering
+        annotations:
+          summary: "Application resources exhausted"
+          description: |
+            Application resources (memory, file descriptors, etc.) are exhausted.
+            Service may become unavailable.
+
+      # Medium: Configuration errors
+      - alert: ConfigurationErrors
+        expr: |
+          sum(rate(error_rate_total{code="APP_CONFIGURATION"}[10m])) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          category: application
+          team: engineering
+        annotations:
+          summary: "Configuration errors detected"
+          description: |
+            Application configuration errors at {{ $value }} per second.
+            Check environment variables and config files.
+
+  - name: error_budgets
+    interval: 60s
+    rules:
+      # Error budget burn rate
+      - alert: ErrorBudgetBurnRate
+        expr: |
+          (
+            sum(rate(error_rate_total[1h])) 
+            / 
+            sum(rate(http_requests_total[1h]))
+          ) > 0.01
+        for: 5m
+        labels:
+          severity: warning
+          category: slo
+          team: sre
+        annotations:
+          summary: "Error budget burning too fast"
+          description: |
+            Error rate is {{ $value | humanizePercentage }} in the last hour.
+            This exceeds the 1% SLO target.
+          runbook_url: "https://wiki.internal/runbooks/error-budget"
+
+      # Critical budget exhaustion
+      - alert: ErrorBudgetExhausted
+        expr: |
+          (
+            sum(increase(error_rate_total[24h])) 
+            / 
+            sum(increase(http_requests_total[24h]))
+          ) > 0.05
+        for: 1m
+        labels:
+          severity: critical
+          category: slo
+          team: sre
+        annotations:
+          summary: "Daily error budget exhausted"
+          description: |
+            24-hour error rate is {{ $value | humanizePercentage }}.
+            Daily error budget of 5% has been exceeded.
+          action: "Consider rolling back recent changes"
+
+  - name: user_impact
+    interval: 30s
+    rules:
+      # Users affected by errors
+      - alert: HighUserImpact
+        expr: |
+          sum(rate(error_user_impact_total[5m])) > 10
+        for: 2m
+        labels:
+          severity: warning
+          category: user_impact
+          team: sre
+        annotations:
+          summary: "High number of users affected by errors"
+          description: |
+            {{ $value }} users per second are encountering errors.
+            This may indicate a widespread issue.
+
+      # Critical user impact
+      - alert: CriticalUserImpact
+        expr: |
+          sum(rate(error_user_impact_total[5m])) > 50
+        for: 1m
+        labels:
+          severity: critical
+          category: user_impact
+          team: sre
+        annotations:
+          summary: "CRITICAL: Massive user impact"
+          description: |
+            {{ $value }} users per second are affected.
+            This is a site-wide issue requiring immediate action.
+
+# Alert routing configuration
+# (This would typically be in alertmanager.yml)
+# route:
+#   receiver: 'default'
+#   routes:
+#     - match:
+#         severity: critical
+#       receiver: 'pagerduty-critical'
+#       continue: true
+#     - match:
+#         category: security
+#       receiver: 'security-team'
+#     - match:
+#         category: vendor
+#       receiver: 'payments-team'
+
+# receivers:
+#   - name: 'default'
+#     slack_configs:
+#       - channel: '#alerts'
+#   - name: 'pagerduty-critical'
+#     pagerduty_configs:
+#       - service_key: '<pagerduty-key>'
+#   - name: 'security-team'
+#     slack_configs:
+#       - channel: '#security-alerts'
+#   - name: 'payments-team'
+#     slack_configs:
+#       - channel: '#payments-alerts'

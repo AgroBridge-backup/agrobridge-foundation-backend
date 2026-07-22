@@ -4,7 +4,7 @@ import helmet from '@fastify/helmet';
 import jwt from '@fastify/jwt';
 import rateLimit from '@fastify/rate-limit';
 import { trace, context } from '@opentelemetry/api';
-import Fastify, { type FastifyBaseLogger } from 'fastify';
+import Fastify, { type FastifyBaseLogger, type FastifyError } from 'fastify';
 import rawBody from 'fastify-raw-body';
 import swagger from '@fastify/swagger';
 import swaggerUI from '@fastify/swagger-ui';
@@ -19,12 +19,33 @@ import { AppError, Errors } from './errors/app-error.js';
 import { fail } from './http/response.js';
 import { requestContext } from './observability/request-context.js';
 import { semconv } from './observability/semconv.js';
+import { handleErrorWithObservability } from './middleware/error-observability.js';
 import { connectRedis, disconnectRedis } from './cache/redis-client.js';
 import { rateLimitMiddleware } from './rate-limiting/middleware.js';
+import { configureFounderNotifier } from './observability/founder-notifier.js';
 
 export type BuildAppOptions = {
   logger?: FastifyBaseLogger | boolean;
 };
+
+/**
+ * Map an HTTP status to the documented semantic ErrorCode for API responses.
+ * The internal taxonomy code (classified.code) is reserved for metrics/logging.
+ */
+function semanticCodeForStatus(status: number): string {
+  switch (status) {
+    case 401:
+      return 'UNAUTHORIZED';
+    case 403:
+      return 'FORBIDDEN';
+    case 404:
+      return 'NOT_FOUND';
+    case 409:
+      return 'CONFLICT';
+    default:
+      return status >= 400 && status < 500 ? 'VALIDATION_ERROR' : 'INTERNAL_ERROR';
+  }
+}
 
 export async function buildApp(opts: BuildAppOptions = {}) {
   const env = loadEnv();
@@ -53,6 +74,10 @@ export async function buildApp(opts: BuildAppOptions = {}) {
   );
 
   app.decorate('env', env);
+
+  // Founder notifications: page on critical errors if a webhook is configured.
+  // No-op when FOUNDER_NOTIFY_WEBHOOK_URL is unset (dev/test).
+  configureFounderNotifier(env.FOUNDER_NOTIFY_WEBHOOK_URL);
 
   const prisma = createPrismaClient();
   app.decorate('prisma', prisma);
@@ -120,6 +145,34 @@ export async function buildApp(opts: BuildAppOptions = {}) {
     },
   });
 
+  // JWT Secret Rotation (zero-downtime): register a SECOND verifier bound to
+  // the previous secret on the `previous` namespace. This decorates
+  // `req.previousJwtVerify()` (reading the SAME `ab_admin` cookie) so that
+  // `requireAdmin` and `/auth/refresh` can accept tokens issued before the
+  // rotation. Clients naturally migrate to current-secret tokens via refresh.
+  //
+  // Why a namespaced instance (not a monkeypatch): in @fastify/jwt v10,
+  // `req.jwtVerify()` is decorated to a closure-captured `fast-jwt` verifier
+  // created at registration. It does NOT call `app.jwt.verify`, so patching
+  // `app.jwt.verify` (as a prior implementation did) had no effect on request
+  // verification. The namespace is the supported multi-secret mechanism.
+  if (env.JWT_SECRET_PREVIOUS) {
+    app.register(jwt, {
+      namespace: 'previous',
+      secret: env.JWT_SECRET_PREVIOUS,
+      cookie: {
+        cookieName: 'ab_admin',
+        signed: true,
+      },
+    });
+  }
+
+  await app.register(rawBody, {
+    field: 'rawBody',
+    global: false,
+    runFirst: true,
+  });
+
   app.register(swagger, {
     openapi: {
       info: {
@@ -150,7 +203,7 @@ export async function buildApp(opts: BuildAppOptions = {}) {
     transformSpecificationClone: true,
   });
 
-  app.addHook('onRequest', async (req) => {
+  app.addHook('onRequest', async (req, reply) => {
     // Correlate logs with tracing.
     const span = trace.getSpan(context.active());
     const traceId = span?.spanContext().traceId;
@@ -164,6 +217,10 @@ export async function buildApp(opts: BuildAppOptions = {}) {
 
     // Provide request-scoped logger to lower layers.
     requestContext.run(req.log);
+
+    if (!reply.sent) {
+      await rateLimitMiddleware(req, reply);
+    }
   });
 
   app.addHook('onResponse', async (req, reply) => {
@@ -174,37 +231,56 @@ export async function buildApp(opts: BuildAppOptions = {}) {
     if (reply.statusCode >= 500) span.setStatus({ code: semconv.SpanStatusCode.ERROR });
   });
 
-  app.setErrorHandler((err, req, reply) => {
-    req.log.error({ err, requestId: req.id }, 'request failed');
+  // --- API Versioning & Correlation Headers ---
+  // Every response includes the API version and echoes the request ID.
+  // This enables contract-driven versioning: the frontend can send
+  // `Accept-Version: 2026-02-01` to pin a specific API contract.
+  const API_VERSION = '2026-02-17';
 
-    // Zod validation errors
-    if (err instanceof ZodError) {
-      const details = err.issues.map((i) => ({ path: i.path, message: i.message }));
-      const e = Errors.validation(details);
-      return reply.status(e.statusCode).send(fail({ code: e.code, message: e.message, details }));
+  app.addHook('onSend', async (req, reply) => {
+    reply.header('X-API-Version', API_VERSION);
+
+    // Echo request ID for end-to-end correlation
+    const requestId = req.id;
+    if (requestId) {
+      reply.header('X-Request-Id', requestId);
     }
 
-    // Our typed errors
+    // Record which version the client requested (for future negotiation)
+    const acceptVersion = req.headers['accept-version'];
+    if (acceptVersion) {
+      const span = trace.getSpan(context.active());
+      span?.setAttribute('api.client_version', acceptVersion as string);
+    }
+  });
+
+  app.setErrorHandler((err, req, reply) => {
+    // Use structured error observability for classification and metrics
+    const classified = handleErrorWithObservability(err as Error | FastifyError, req, reply);
+    // The taxonomy code (classified.code, e.g. SEC_AUTHENTICATION / APP_VALIDATION)
+    // is for INTERNAL metrics/logging only. API consumers get the documented
+    // semantic ErrorCode derived from the HTTP status (or the AppError's own code).
+    const semanticCode = semanticCodeForStatus(classified.httpStatus);
+
+    // Zod validation errors - return field-level details
+    if (err instanceof ZodError) {
+      const details = err.issues.map((i) => ({ path: i.path, message: i.message }));
+      return reply
+        .status(classified.httpStatus)
+        .send(fail({ code: 'VALIDATION_ERROR', message: classified.message, details }));
+    }
+
+    // Our typed errors - return the AppError's own code/message + details
     if (err instanceof AppError) {
       return reply
-        .status(err.statusCode)
+        .status(classified.httpStatus)
         .send(fail({ code: err.code, message: err.message, details: err.details }));
     }
 
-    // Fastify schema validation (AJV) lands here with statusCode
-    const statusCode =
-      typeof (err as { statusCode?: unknown }).statusCode === 'number'
-        ? (err as { statusCode: number }).statusCode
-        : 500;
-
-    if (statusCode >= 400 && statusCode < 500) {
-      return reply
-        .status(statusCode)
-        .send(fail({ code: 'VALIDATION_ERROR', message: 'Invalid input' }));
-    }
-
-    const e = Errors.internal();
-    return reply.status(e.statusCode).send(fail({ code: e.code, message: e.message }));
+    // Fastify (AJV) schema validation + any other framework/generic error
+    return reply
+      .status(classified.httpStatus)
+      .send(fail({ code: semanticCode, message: classified.message }));
   });
 
   registerRoutes(app);

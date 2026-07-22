@@ -23,7 +23,7 @@ describe('AdminDashboardService', () => {
         totalRaised: 15000,
         donationCount: 2,
         donorCount: 2,
-        lastDonationAt: new Date('2024-01-01T00:00:00Z'),
+        lastDonationAt: donationFixtures.succeeded.createdAt,
       };
       mockDonations.dashboardMetrics.mockResolvedValue({
         succeededAgg: { _sum: { amount: 15000 }, _count: { _all: 2 } },
@@ -48,11 +48,11 @@ describe('AdminDashboardService', () => {
         lastDonation: donationFixtures.succeeded,
       });
 
-      await svc.getMetrics({ ttlMs: 0 });
+      await svc.getMetrics({ ttlMs: 1 });
 
       await new Promise((resolve) => setTimeout(resolve, 10));
 
-      await svc.getMetrics({ ttlMs: 0 });
+      await svc.getMetrics({ ttlMs: 1 });
 
       expect(mockDonations.dashboardMetrics).toHaveBeenCalledTimes(2);
     }, 10000);

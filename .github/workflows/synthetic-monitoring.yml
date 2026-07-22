@@ -1,0 +1,248 @@
+name: Synthetic Monitoring
+
+on:
+  schedule:
+    # Every 5 minutes
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      target_url:
+        description: 'Override target URL for testing'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  PRODUCTION_URL: ${{ inputs.target_url || 'https://agrobridgefoundation.org' }}
+  API_URL: ${{ inputs.target_url || 'https://api.agrobridgefoundation.org' }}
+
+jobs:
+  synthetic-probes:
+    name: Production Health Probes
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+
+    steps:
+      - name: Probe frontend (HTML)
+        id: frontend
+        run: |
+          set +e
+          START=$(date +%s%N)
+          STATUS=$(curl -s -o /dev/null -w '%{http_code}' \
+            --max-time 10 \
+            --retry 2 \
+            --retry-delay 3 \
+            "$PRODUCTION_URL")
+          END=$(date +%s%N)
+          DURATION=$(( (END - START) / 1000000 ))
+
+          echo "status=$STATUS" >> $GITHUB_OUTPUT
+          echo "duration_ms=$DURATION" >> $GITHUB_OUTPUT
+
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Frontend returned HTTP $STATUS (expected 200)"
+            echo "healthy=false" >> $GITHUB_OUTPUT
+          else
+            echo "✅ Frontend: HTTP $STATUS in ${DURATION}ms"
+            echo "healthy=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Probe API health endpoint
+        id: api_health
+        run: |
+          set +e
+          START=$(date +%s%N)
+          RESPONSE=$(curl -s --max-time 10 --retry 2 --retry-delay 3 \
+            "$API_URL/api/health")
+          STATUS=$?
+          END=$(date +%s%N)
+          DURATION=$(( (END - START) / 1000000 ))
+
+          echo "duration_ms=$DURATION" >> $GITHUB_OUTPUT
+
+          if [ $STATUS -ne 0 ]; then
+            echo "::error::API health endpoint unreachable (curl exit: $STATUS)"
+            echo "healthy=false" >> $GITHUB_OUTPUT
+          else
+            # Check if response contains "ok":true
+            echo "$RESPONSE" | grep -q '"ok":true'
+            if [ $? -eq 0 ]; then
+              echo "✅ API Health: OK in ${DURATION}ms"
+              echo "healthy=true" >> $GITHUB_OUTPUT
+            else
+              echo "::error::API health returned unexpected response: $RESPONSE"
+              echo "healthy=false" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+      - name: Probe API version header
+        id: api_version
+        run: |
+          set +e
+          HEADERS=$(curl -s -I --max-time 10 "$API_URL/api/health")
+
+          # Check X-API-Version header presence
+          echo "$HEADERS" | grep -qi 'x-api-version'
+          if [ $? -eq 0 ]; then
+            VERSION=$(echo "$HEADERS" | grep -i 'x-api-version' | awk '{print $2}' | tr -d '\r')
+            echo "✅ API Version: $VERSION"
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+          else
+            echo "⚠️ X-API-Version header missing"
+          fi
+
+          # Check X-Request-Id header echo
+          echo "$HEADERS" | grep -qi 'x-request-id'
+          if [ $? -eq 0 ]; then
+            echo "✅ X-Request-Id header present"
+          else
+            echo "⚠️ X-Request-Id header missing"
+          fi
+
+      - name: Probe TLS certificate
+        id: tls
+        run: |
+          set +e
+          DOMAIN=$(echo "$PRODUCTION_URL" | sed 's|https://||' | sed 's|/.*||')
+          EXPIRY=$(echo | openssl s_client -connect "$DOMAIN:443" -servername "$DOMAIN" 2>/dev/null | \
+            openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2)
+
+          if [ -z "$EXPIRY" ]; then
+            echo "::warning::Could not check TLS certificate"
+            echo "healthy=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          EXPIRY_EPOCH=$(date -d "$EXPIRY" +%s 2>/dev/null || date -j -f "%b %d %T %Y %Z" "$EXPIRY" +%s 2>/dev/null)
+          NOW_EPOCH=$(date +%s)
+          DAYS_LEFT=$(( (EXPIRY_EPOCH - NOW_EPOCH) / 86400 ))
+
+          echo "days_left=$DAYS_LEFT" >> $GITHUB_OUTPUT
+
+          if [ "$DAYS_LEFT" -lt 14 ]; then
+            echo "::error::TLS certificate expires in $DAYS_LEFT days!"
+            echo "healthy=false" >> $GITHUB_OUTPUT
+          else
+            echo "✅ TLS certificate valid for $DAYS_LEFT more days"
+            echo "healthy=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Performance threshold check
+        id: perf
+        run: |
+          set +e
+          # TTFB should be under 2000ms
+          TTFB_MS=$(curl -s -o /dev/null -w '%{time_starttransfer}' \
+            --max-time 15 "$PRODUCTION_URL")
+          TTFB_INT=$(echo "$TTFB_MS * 1000" | bc | cut -d. -f1)
+
+          echo "ttfb_ms=$TTFB_INT" >> $GITHUB_OUTPUT
+
+          if [ "$TTFB_INT" -gt 2000 ]; then
+            echo "::warning::TTFB is ${TTFB_INT}ms (threshold: 2000ms)"
+            echo "healthy=false" >> $GITHUB_OUTPUT
+          else
+            echo "✅ TTFB: ${TTFB_INT}ms"
+            echo "healthy=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Aggregate results
+        if: always()
+        run: |
+          echo "## 🏥 Synthetic Monitoring Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Probe | Status | Latency |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|---------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Frontend | ${{ steps.frontend.outputs.healthy == 'true' && '✅' || '❌' }} HTTP ${{ steps.frontend.outputs.status }} | ${{ steps.frontend.outputs.duration_ms }}ms |" >> $GITHUB_STEP_SUMMARY
+          echo "| API Health | ${{ steps.api_health.outputs.healthy == 'true' && '✅' || '❌' }} | ${{ steps.api_health.outputs.duration_ms }}ms |" >> $GITHUB_STEP_SUMMARY
+          echo "| TLS Cert | ${{ steps.tls.outputs.healthy == 'true' && '✅' || '⚠️' }} ${{ steps.tls.outputs.days_left }}d remaining | — |" >> $GITHUB_STEP_SUMMARY
+          echo "| TTFB | ${{ steps.perf.outputs.healthy == 'true' && '✅' || '⚠️' }} | ${{ steps.perf.outputs.ttfb_ms }}ms |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "_Checked at $(date -u +%Y-%m-%dT%H:%M:%SZ)_" >> $GITHUB_STEP_SUMMARY
+
+      - name: Fail if any probe unhealthy
+        id: verdict
+        if: always()
+        run: |
+          FAILED=false
+
+          if [ "${{ steps.frontend.outputs.healthy }}" = "false" ]; then
+            echo "❌ Frontend probe failed"
+            FAILED=true
+          fi
+
+          if [ "${{ steps.api_health.outputs.healthy }}" = "false" ]; then
+            echo "❌ API health probe failed"
+            FAILED=true
+          fi
+
+          if [ "${{ steps.tls.outputs.healthy }}" = "false" ]; then
+            echo "❌ TLS probe failed"
+            FAILED=true
+          fi
+
+          # Performance is a warning, not a failure
+          if [ "${{ steps.perf.outputs.healthy }}" = "false" ]; then
+            echo "⚠️ Performance below threshold (non-blocking)"
+          fi
+
+          echo "failed=$FAILED" >> $GITHUB_OUTPUT
+
+          if [ "$FAILED" = "true" ]; then
+            echo "::error::One or more critical probes failed!"
+            exit 1
+          fi
+
+          echo "✅ All probes passed"
+
+      # --- Slack Alert on Failure ---
+      # Sends a structured notification to the #production-alerts channel
+      # when any critical probe fails. Requires SLACK_WEBHOOK_SYNTHETIC secret.
+      - name: Alert on failure (Slack)
+        if: always() && steps.verdict.outputs.failed == 'true' && env.SLACK_WEBHOOK_SYNTHETIC != ''
+        env:
+          SLACK_WEBHOOK_SYNTHETIC: ${{ secrets.SLACK_WEBHOOK_SYNTHETIC }}
+        run: |
+          TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          FRONTEND_STATUS="${{ steps.frontend.outputs.healthy == 'true' && '✅ Healthy' || '❌ DOWN' }}"
+          API_STATUS="${{ steps.api_health.outputs.healthy == 'true' && '✅ Healthy' || '❌ DOWN' }}"
+          TLS_STATUS="${{ steps.tls.outputs.healthy == 'true' && '✅ OK' || '⚠️ Expiring' }}"
+          PERF_STATUS="${{ steps.perf.outputs.healthy == 'true' && '✅ OK' || '⚠️ Slow' }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          curl -sS -X POST "$SLACK_WEBHOOK_SYNTHETIC" \
+            -H 'Content-Type: application/json' \
+            -d @- <<PAYLOAD
+          {
+            "blocks": [
+              {
+                "type": "header",
+                "text": {
+                  "type": "plain_text",
+                  "text": "🚨 Production Probe Failure",
+                  "emoji": true
+                }
+              },
+              {
+                "type": "section",
+                "fields": [
+                  { "type": "mrkdwn", "text": "*Frontend:* ${FRONTEND_STATUS}" },
+                  { "type": "mrkdwn", "text": "*API Health:* ${API_STATUS}" },
+                  { "type": "mrkdwn", "text": "*TLS Cert:* ${TLS_STATUS}" },
+                  { "type": "mrkdwn", "text": "*TTFB:* ${PERF_STATUS}" }
+                ]
+              },
+              {
+                "type": "context",
+                "elements": [
+                  { "type": "mrkdwn", "text": "⏰ ${TIMESTAMP} | <${RUN_URL}|View Run>" }
+                ]
+              }
+            ]
+          }
+          PAYLOAD
+
+          echo "📢 Slack alert sent"
+

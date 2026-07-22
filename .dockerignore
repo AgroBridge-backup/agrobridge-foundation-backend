@@ -1,0 +1,15 @@
+node_modules
+dist
+.git
+.github
+.env*
+*.md
+tests
+load-tests
+coverage
+artifacts
+scripts
+contracts
+.eslintrc*
+.prettier*
+vitest.config.*

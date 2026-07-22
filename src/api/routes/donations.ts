@@ -1,45 +1,102 @@
 import type { FastifyInstance } from 'fastify';
 
-import { ok } from '../../http/response.js';
+import { ok, fail } from '../../http/response.js';
 import { DonationRepository } from '../../repositories/donation-repo.js';
 import { DonationService } from '../../services/donation-service.js';
 import { StripeService } from '../../services/stripe-service.js';
+import { getIdempotencyService, IdempotencyService } from '../../services/idempotency-service.js';
+import {
+  getAllowedDonationRedirectOrigins,
+  validateRedirectUrl,
+} from '../../utils/redirect-url.js';
 
 export async function donationRoutes(app: FastifyInstance) {
-  app.post('/donations/intent', async (req) => {
-    const donationService = new DonationService(new DonationRepository(app.prisma));
-    const intent = await donationService.createDonationIntent(req.body);
+  app.post('/donations/intent', async (req, reply) => {
+    // --- Idempotency check ---
+    // Prevents duplicate Stripe checkout sessions from double-clicks,
+    // network retries, or concurrent requests with the same key.
+    const idempotencyKey = req.headers['idempotency-key'] as string | undefined;
 
-    // Use frontend-provided URLs if available, otherwise fall back to CORS_ORIGIN
-    const successOrigin = app.env.CORS_ORIGIN.split(',')[0]?.trim() ?? '';
-    const resolvedSuccessUrl = intent.successUrl ?? `${successOrigin}/donation/success?session_id={CHECKOUT_SESSION_ID}`;
-    const resolvedCancelUrl = intent.cancelUrl ?? `${successOrigin}/donation/cancel`;
+    if (idempotencyKey) {
+      if (!IdempotencyService.isValidKey(idempotencyKey)) {
+        reply.status(400);
+        return fail({
+          code: 'VALIDATION_ERROR',
+          message: 'Idempotency-Key must be a valid UUID v4',
+        });
+      }
 
-    const stripeService = new StripeService(app.stripe, new DonationRepository(app.prisma));
+      const idempotencyService = getIdempotencyService();
+      const result = await idempotencyService.execute(idempotencyKey, async () => {
+        const session = await createDonationSession(app, req);
+        return { status: 200, body: ok(session) };
+      });
 
-    const payload: {
-      donationId: string;
-      amount: number;
-      currency: string;
-      successUrl: string;
-      cancelUrl: string;
-      frequency: 'one-time' | 'monthly';
-      donorEmail?: string;
-      metadata?: Record<string, string | number | boolean>;
-    } = {
-      donationId: intent.donationId,
-      amount: intent.amount,
-      currency: intent.currency,
-      successUrl: resolvedSuccessUrl,
-      cancelUrl: resolvedCancelUrl,
-      frequency: intent.frequency,
-    };
+      reply.status(result.status);
+      return result.body;
+    }
 
-    if (intent.donorEmail) payload.donorEmail = intent.donorEmail;
-    if (intent.metadata) payload.metadata = intent.metadata;
-
-    const session = await stripeService.createCheckoutSession(payload);
-
+    // No idempotency key — execute directly (backwards compatible)
+    const session = await createDonationSession(app, req);
     return ok(session);
   });
+}
+
+/**
+ * Core donation session creation logic, extracted for idempotency wrapping.
+ */
+async function createDonationSession(app: FastifyInstance, req: any) {
+  const donationService = new DonationService(new DonationRepository(app.prisma));
+  const intent = await donationService.createDonationIntent(req.body);
+
+  const allowedOrigins = getAllowedDonationRedirectOrigins(app.env);
+  const defaultOrigin = allowedOrigins[0] ?? 'http://localhost:3000';
+
+  const defaultSuccessUrl = `${defaultOrigin}/donation/success?session_id={CHECKOUT_SESSION_ID}`;
+  const defaultCancelUrl = `${defaultOrigin}/donation/cancel`;
+
+  const resolvedSuccessUrl = validateRedirectUrl({
+    candidateUrl: intent.successUrl,
+    defaultUrl: defaultSuccessUrl,
+    allowedOrigins,
+    requireHttps: app.env.NODE_ENV === 'production',
+    fieldName: 'successUrl',
+    allowedPathPrefixes: ['/donation/success'],
+    log: req.log,
+  });
+
+  const resolvedCancelUrl = validateRedirectUrl({
+    candidateUrl: intent.cancelUrl,
+    defaultUrl: defaultCancelUrl,
+    allowedOrigins,
+    requireHttps: app.env.NODE_ENV === 'production',
+    fieldName: 'cancelUrl',
+    allowedPathPrefixes: ['/donation/cancel'],
+    log: req.log,
+  });
+
+  const stripeService = new StripeService(app.stripe, new DonationRepository(app.prisma));
+
+  const payload: {
+    donationId: string;
+    amount: number;
+    currency: string;
+    successUrl: string;
+    cancelUrl: string;
+    frequency: 'one-time' | 'monthly';
+    donorEmail?: string;
+    metadata?: Record<string, string | number | boolean>;
+  } = {
+    donationId: intent.donationId,
+    amount: intent.amount,
+    currency: intent.currency,
+    successUrl: resolvedSuccessUrl,
+    cancelUrl: resolvedCancelUrl,
+    frequency: intent.frequency,
+  };
+
+  if (intent.donorEmail) payload.donorEmail = intent.donorEmail;
+  if (intent.metadata) payload.metadata = intent.metadata;
+
+  return stripeService.createCheckoutSession(payload);
 }

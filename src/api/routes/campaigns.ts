@@ -191,11 +191,19 @@ export async function campaignRoutes(app: FastifyInstance) {
   /**
    * Restore campaign (admin)
    */
-  app.post('/admin/campaigns/:id/restore', async (req) => {
+  app.post('/admin/campaigns/:id/restore', async (req, reply) => {
     await requireAdmin(req);
     requireSuperAdmin(req);
 
     const { id } = req.params as { id: string };
+
+    // Validate UUID format
+    const uuidSchema = z.string().uuid();
+    const parseResult = uuidSchema.safeParse(id);
+    if (!parseResult.success) {
+      reply.status(400);
+      return fail({ code: 'VALIDATION_ERROR', message: 'Invalid campaign ID format' });
+    }
 
     const service = new CampaignService(new CampaignRepository(app.prisma));
     const campaign = await service.restore(id);

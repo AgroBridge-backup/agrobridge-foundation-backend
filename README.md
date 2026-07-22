@@ -34,8 +34,6 @@ npm run dev
 Interactive API documentation is available:
 
 - **Swagger UI**: http://localhost:3000/docs
-- **Redoc**: http://localhost:3000/api-docs
-- **OpenAPI Spec**: http://localhost:3000/json-docs
 
 ## Authentication
 
@@ -87,20 +85,20 @@ When Redis is not available, the system automatically falls back to in-memory ra
 Run tests:
 
 ```bash
-npm run test:unit              # Unit tests
-npm run test:integration         # Integration tests (requires Docker)
-npm run test:performance         # Performance benchmarks
+npm run test:tier1              # Tier 1 PR required (lint + build + unit)
+npm run test:tier2              # Tier 2 PR required (integration, Docker)
+npm run test:tier3              # Tier 3 nightly (chaos/perf/bench/load)
+npm run contracts:check         # OpenAPI snapshot + contract locks
+npm run test:synthetic          # Synthetic checks: health, donations, contacts
 ```
 
 ### Monitoring
 
-Metrics are exposed at `/metrics` endpoint:
+Rate limiting metrics are defined in `src/observability/metrics/rate-limiting-metrics.ts` using prom-client and exposed via `GET /metrics` in Prometheus exposition format. Available metrics:
 
 - `rate_limit_checks_total`: Total number of rate limit checks
 - `rate_limit_check_duration_seconds`: Histogram of check durations
 - `rate_limit_fallbacks_total`: Number of fallback activations
-
-All metrics include labels for tier, allowed status, and storage backend (Redis/in-memory).
 
 ### Response Headers
 
@@ -113,17 +111,24 @@ Headers included in responses:
 ## Testing
 
 ```bash
-# Run unit tests
-npm run test:unit
+# Tier 1 PR required
+npm run test:tier1
 
-# Run integration tests (requires Docker)
-npm run test:integration
+# Tier 2 PR required with Docker
+npm run test:tier2
 
-# Run E2E tests (requires Playwright installation)
+# Tier 3 nightly stress suites
+npm run test:tier3
+
+# Contract and synthetic checks
+npm run contracts:check
+npm run test:synthetic
+
+# Run backend E2E tests
 npm run test:e2e
 
-# Run load tests (requires k6 installation)
-npm run test:load
+# Optional UI/browser E2E tests (frontend flows)
+npm run test:e2e:ui
 
 # Generate coverage report
 npm run test:coverage
@@ -131,28 +136,24 @@ npm run test:coverage
 
 ### Coverage Targets
 
-- **Lines**: 98%
-- **Functions**: 98%
-- **Branches**: 95%
-- **Statements**: 98%
+Coverage targets are aspirational; actual coverage is still being improved:
+- **Lines**: 98% (target)
+- **Functions**: 98% (target)
+- **Branches**: 95% (target)
+- **Statements**: 98% (target)
 
 ## Monitoring
 
 ### Prometheus
 
-- **Metrics Endpoint**: http://localhost:3000/metrics
-- **Dashboard**: http://localhost:3001 (Grafana)
+- **Metrics**: `GET /metrics` (Prometheus exposition format)
+- **Dashboard**: http://localhost:3001 (Grafana, when using docker-compose.monitoring.yml)
 
 ### Grafana Dashboards
 
 Access at http://localhost:3001 (admin/admin):
 
-- System Overview
-- API Performance
-- Database Health
-- Cache Health
-- Business Metrics
-- Alerts
+- Rate Limiting Production dashboard (`monitoring/grafana/dashboards/rate-limiting-production.json`)
 
 ### Key Metrics
 
@@ -188,21 +189,15 @@ docker-compose -f docker-compose.monitoring.yml up -d
 
 ## Capacity Planning
 
-Based on load testing (2024-01):
+Estimated capacity (not yet validated via load testing):
 
-| Endpoint                   | Capacity (RPS) | p95 Latency | Notes                 |
-| -------------------------- | -------------- | ----------- | --------------------- |
-| GET /api/health            | 1000           | 10ms        | Baseline              |
-| POST /api/contacts         | 100            | 150ms       | Limited by DB writes  |
-| POST /api/donations/intent | 100            | 400ms       | Limited by Stripe API |
-| GET /api/admin/dashboard   | 50             | 80ms        | With Redis cache      |
-| GET /api/admin/donations   | 50             | 180ms       | Pagination queries    |
-
-**Recommended Production Configuration**:
-
-- Minimum: 2 ECS tasks (handles 200 RPS sustained)
-- Recommended: 4 ECS tasks (handles 400 RPS sustained)
-- With autoscaling: 2-10 tasks (handles 200-1000 RPS burst)
+| Endpoint                   | Est. Capacity (RPS) | Notes                 |
+| -------------------------- | -------------------- | --------------------- |
+| GET /api/health            | ~1000                | Baseline              |
+| POST /api/contacts         | ~100                 | Limited by DB writes  |
+| POST /api/donations/intent | ~100                 | Limited by Stripe API |
+| GET /api/admin/dashboard   | ~50                  | With Redis cache      |
+| GET /api/admin/donations   | ~50                  | Pagination queries    |
 
 ## Project Structure
 
@@ -210,8 +205,7 @@ Based on load testing (2024-01):
 src/
 ├── api/                 # API routes and schemas
 │   ├── routes/          # Fastify route definitions
-│   ├── schemas/         # Zod/OpenAPI schemas
-│   └── docs/            # Documentation setup
+│   └── schemas/         # Zod/OpenAPI schemas
 ├── auth/                # Authentication logic
 ├── cache/               # Redis caching layer
 ├── config/              # Configuration and environment
@@ -227,9 +221,9 @@ src/
 └── app.ts               # Application setup
 
 tests/
-├── e2e/                 # End-to-end tests (Playwright)
-│   ├── fixtures/pages/
-│   └── specs/
+├── e2e/                 # Backend end-to-end tests
+│   ├── fixtures/pages/  # UI page objects for optional browser tests
+│   └── specs/           # Optional browser tests (test:e2e:ui)
 ├── helpers/              # Test helpers
 ├── integration/           # Integration tests
 ├── mocks/                # Mock factories
@@ -285,6 +279,8 @@ Optional:
 - `REDIS_URL`: Redis connection string (for caching)
 - `OTEL_EXPORTER_OTLP_ENDPOINT`: OpenTelemetry collector endpoint
 - `DB_SLOW_MS`: Slow query threshold (ms)
+- `DB_POOL_MAX`: Connection pool maximum size (default: 20)
+- `DB_POOL_IDLE_TIMEOUT`: Connection pool idle timeout in ms (default: 20000)
 
 ### Production Checklist
 

@@ -55,3 +55,46 @@ groups:
         annotations:
           summary: 'High rate of failed admin logins'
           description: 'Failed login rate is {{ $value | humanizePercentage }}'
+
+      - alert: BackendSLOErrorRateCritical
+        expr: |
+          (
+            sum(rate(http_requests_total{route=~"/api/health|/api/contacts|/api/donations/intent",status=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(http_requests_total{route=~"/api/health|/api/contacts|/api/donations/intent"}[5m])), 1)
+          ) > 0.01
+        for: 10m
+        labels:
+          severity: critical
+          team: platform
+          slo: backend
+        annotations:
+          summary: 'Backend SLO error-rate violation'
+          description: '5xx error rate for synthetic-critical endpoints exceeded 1% for 10 minutes'
+
+      - alert: BackendSLOP95LatencyWarning
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(http_request_duration_seconds_bucket{route=~"/api/health|/api/contacts|/api/donations/intent"}[5m])) by (le, route)
+          ) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+          slo: backend
+        annotations:
+          summary: 'Backend SLO p95 latency violation'
+          description: 'p95 latency for a synthetic-critical endpoint is over 500ms'
+
+      - alert: BackendDependencyReadinessCritical
+        expr: |
+          min_over_time(up{job="agrobridge-api"}[5m]) < 1
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+          slo: backend
+        annotations:
+          summary: 'Backend dependency readiness failure'
+          description: 'Agrobridge API scrape target has been unavailable for 5 minutes'

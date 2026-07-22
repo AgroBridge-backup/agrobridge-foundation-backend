@@ -1,0 +1,119 @@
+# Artillery Load Testing Configuration
+# AgroBridge Foundation Backend Load Testing
+# Usage: artillery run -c artillery-config.yml scenarios/auth-load.yml
+
+config:
+  target: '{{ $processEnvironment.API_URL || "http://localhost:3000" }}'
+  phases:
+    # Warm-up phase - gradual ramp up
+    - duration: 60
+      arrivalRate: 5
+      rampTo: 50
+      name: 'Warm-up Phase'
+    
+    # Sustained load - moderate traffic
+    - duration: 300
+      arrivalRate: 50
+      name: 'Sustained Load Phase'
+    
+    # Peak load - high traffic spike
+    - duration: 120
+      arrivalRate: 50
+      rampTo: 200
+      name: 'Peak Load Phase'
+    
+    # Recovery phase - gradual ramp down
+    - duration: 60
+      arrivalRate: 200
+      rampTo: 10
+      name: 'Recovery Phase'
+
+  # Default request configuration
+  defaults:
+    headers:
+      Content-Type: 'application/json'
+      Accept: 'application/json'
+      X-Request-ID: '{{ $randomUUID() }}'
+
+  # Plugins configuration
+  plugins:
+    ensure:
+      thresholds:
+        - http.response_time.p95: 500
+        - http.response_time.p99: 1000
+        - http.request_rate: 10
+        - vusers.failed: 1
+      
+    metrics-by-endpoint:
+      useOnlyRequestNames: true
+      
+    publish-metrics:
+      - type: cloudwatch
+        region: us-east-1
+        namespace: artillery-load-tests
+        
+  # Payload configuration
+  payload:
+    - path: '../fixtures/users.csv'
+      skipHeader: true
+      fields:
+        - email
+        - password
+      order: random
+      
+    - path: '../fixtures/donations.csv'
+      skipHeader: true
+      fields:
+        - donorEmail
+        - donorName
+        - amount
+        - campaignId
+      order: random
+
+  # Variables
+  variables:
+    testRunId: '{{ $randomUUID() }}'
+    startTime: '{{ $datetime() }}'
+
+  # Processor for custom logic
+  processor: '../helpers/artillery-processor.js'
+
+  # Engine options
+  engines:
+    http:
+      timeout: 30
+      maxSockets: 100
+      pool:
+        maxSockets: 100
+
+  # Test environment overrides
+  environments:
+    staging:
+      target: 'https://api-staging.agrobridgefoundation.org'
+      phases:
+        - duration: 30
+          arrivalRate: 10
+          rampTo: 50
+        - duration: 180
+          arrivalRate: 50
+          
+    production:
+      target: 'https://api.agrobridgefoundation.org'
+      phases:
+        - duration: 60
+          arrivalRate: 50
+          rampTo: 100
+        - duration: 600
+          arrivalRate: 100
+        - duration: 60
+          arrivalRate: 100
+          rampTo: 10
+      plugins:
+        ensure:
+          thresholds:
+            - http.response_time.p95: 300
+            - http.response_time.p99: 500
+            - vusers.failed: 0.5
+            
+# Scenarios to be loaded from scenario files
+scenarios: []

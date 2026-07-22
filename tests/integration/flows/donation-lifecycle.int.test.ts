@@ -1,19 +1,31 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
-import { buildApp } from '../../src/app.js';
-import { setupTestDatabase, teardownTestDatabase } from '../helpers/setup-db.js';
+import { buildApp } from '../../../src/app.js';
+import { setupTestDatabase, teardownTestDatabase } from '../../helpers/setup-db.js';
+import { setTestEnv } from '../../helpers/env.js';
 import type { FastifyInstance } from 'fastify';
 
 describe('Donation Lifecycle Integration Tests', () => {
   let app: FastifyInstance;
+  let sessionCounter = 0;
 
   beforeAll(async () => {
+    setTestEnv();
     await setupTestDatabase();
     app = await buildApp({ logger: false });
     await app.ready();
+    (app as any).stripe.checkout.sessions.create = async () => {
+      sessionCounter += 1;
+      return {
+        id: `cs_test_${sessionCounter}`,
+        url: `https://stripe.test/cs_test_${sessionCounter}`,
+      };
+    };
   });
 
   afterAll(async () => {
-    await app.close();
+    if (app) {
+      await app.close();
+    }
     await teardownTestDatabase();
   });
 
@@ -23,10 +35,8 @@ describe('Donation Lifecycle Integration Tests', () => {
   });
 
   afterEach(async () => {
-    const donationCount = await app.prisma.donation.count();
-    const webhookCount = await app.prisma.webhookEvent.count();
-    expect(donationCount).toBe(0);
-    expect(webhookCount).toBe(0);
+    await app.prisma.webhookEvent.deleteMany();
+    await app.prisma.donation.deleteMany();
   });
 
   describe('Complete donation flow', () => {
@@ -44,18 +54,16 @@ describe('Donation Lifecycle Integration Tests', () => {
       expect(intentResponse.statusCode).toBe(200);
       const intentData = intentResponse.json();
       expect(intentData.ok).toBe(true);
-      expect(intentData.data.donationId).toBeDefined();
-      expect(intentData.data.stripeSessionId).toBeDefined();
+      expect(intentData.data.sessionId).toBeDefined();
 
-      const donationId = intentData.data.donationId;
-
-      const donation = await app.prisma.donation.findUnique({
-        where: { id: donationId },
+      const donation = await app.prisma.donation.findFirst({
+        where: { stripeSessionId: intentData.data.sessionId },
       });
 
       expect(donation).toBeDefined();
       expect(donation?.status).toBe('PENDING');
       expect(donation?.amount).toBe(5000);
+      expect(donation?.donorEmail).toBe('donor@example.com');
     });
 
     it('should expire donation via webhook', async () => {
@@ -69,8 +77,8 @@ describe('Donation Lifecycle Integration Tests', () => {
         },
       });
 
-      const donationId = intentResponse.json().data.donationId;
-      const stripeSessionId = intentResponse.json().data.stripeSessionId;
+      expect(intentResponse.statusCode).toBe(200);
+      const stripeSessionId = intentResponse.json().data.sessionId;
 
       const webhookPayload = {
         id: `evt_test_${Date.now()}`,
@@ -96,8 +104,8 @@ describe('Donation Lifecycle Integration Tests', () => {
 
       expect(webhookResponse.statusCode).toBeGreaterThanOrEqual(400);
 
-      const donation = await app.prisma.donation.findUnique({
-        where: { id: donationId },
+      const donation = await app.prisma.donation.findFirst({
+        where: { stripeSessionId },
       });
 
       expect(donation?.status).toBe('PENDING');

@@ -118,11 +118,19 @@ export async function adminUserRoutes(app: FastifyInstance) {
   // =========================================================================
   // RESTORE ADMIN (SUPER_ADMIN only) - Restore soft-deleted user
   // =========================================================================
-  app.post('/admin/users/:id/restore', async (req) => {
+  app.post('/admin/users/:id/restore', async (req, reply) => {
     await requireAdmin(req);
     requireSuperAdmin(req);
 
     const { id } = req.params as { id: string };
+
+    // Validate UUID format
+    const uuidSchema = z.string().uuid();
+    const parseResult = uuidSchema.safeParse(id);
+    if (!parseResult.success) {
+      reply.status(400);
+      return fail({ code: 'VALIDATION_ERROR', message: 'Invalid user ID format' });
+    }
 
     const service = new AdminUserService(app.prisma);
     const admin = await service.restoreAdmin(id);
@@ -143,6 +151,14 @@ export async function adminUserRoutes(app: FastifyInstance) {
     if (!newPassword || typeof newPassword !== 'string') {
       reply.status(400);
       return fail({ code: 'VALIDATION_ERROR', message: 'newPassword is required' });
+    }
+
+    // Validate UUID format
+    const uuidSchema = z.string().uuid();
+    const parseResult = uuidSchema.safeParse(id);
+    if (!parseResult.success) {
+      reply.status(400);
+      return fail({ code: 'VALIDATION_ERROR', message: 'Invalid user ID format' });
     }
 
     const service = new AdminUserService(app.prisma);

@@ -1,0 +1,111 @@
+name: Preprod Release Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      error_budget_override:
+        description: 'Set true only for approved emergency override'
+        type: boolean
+        default: false
+        required: true
+      override_reason:
+        description: 'Required if override is true'
+        type: string
+        required: false
+  push:
+    tags:
+      - 'release-*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: preprod-release-gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  preprod-release-gate:
+    name: preprod-release-gate
+    runs-on: ubuntu-latest
+    environment:
+      name: preprod
+    timeout-minutes: 45
+    env:
+      PREPROD_DATABASE_URL: ${{ secrets.PREPROD_DATABASE_URL }}
+      PREPROD_BASE_URL: ${{ secrets.PREPROD_BASE_URL }}
+      PREPROD_DEPLOY_COMMAND: ${{ secrets.PREPROD_DEPLOY_COMMAND }}
+      PROMETHEUS_BASE_URL: ${{ secrets.PROMETHEUS_BASE_URL }}
+      PROMETHEUS_BEARER_TOKEN: ${{ secrets.PROMETHEUS_BEARER_TOKEN }}
+      ERROR_BUDGET_OVERRIDE: ${{ github.event_name == 'workflow_dispatch' && inputs.error_budget_override && 'approved' || '' }}
+      ERROR_BUDGET_OVERRIDE_REASON: ${{ github.event_name == 'workflow_dispatch' && inputs.override_reason || '' }}
+      ARTIFACT_SENSITIVITY: restricted-internal
+      RELEASE_ENVIRONMENT: preprod
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Setup Node and install dependencies
+        uses: ./.github/actions/setup-node-install
+        with:
+          node-version: '20'
+
+      - name: Generate Prisma client
+        run: npm run prisma:generate
+
+      - name: Build release artifact
+        run: npm run build
+
+      - name: Enforce error budget policy
+        run: |
+          mkdir -p artifacts/reliability
+          set -o pipefail
+          node ./scripts/reliability/check-error-budget.mjs 2>&1 | tee artifacts/reliability/error-budget-check.log
+
+      - name: Migration dry-run (no apply)
+        run: |
+          mkdir -p artifacts/preprod
+          set -o pipefail
+          ./scripts/release/migrate-dry-run.sh 2>&1 | tee artifacts/preprod/migration-dry-run.log
+
+      - name: Deploy to preprod (artifact-based)
+        run: |
+          mkdir -p artifacts/preprod
+          set -o pipefail
+          ./scripts/release/deploy-preprod.sh 2>&1 | tee -a artifacts/preprod/deploy-preprod.log
+
+      - name: Synthetic smoke against deployed preprod
+        run: |
+          mkdir -p artifacts/preprod
+          set -o pipefail
+          node ./scripts/release/synthetic-smoke.mjs 2>&1 | tee artifacts/preprod/synthetic-smoke.log
+
+      - name: Upload preprod gate artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: preprod-release-gate-artifacts
+          path: |
+            artifacts/preprod
+            artifacts/reliability
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: Publish summary
+        if: always()
+        run: |
+          echo "## Preprod Release Gate" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f artifacts/preprod/migration-dry-run.sql ]; then
+            echo "- migration dry-run SQL: generated" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- migration dry-run SQL: missing" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -f artifacts/reliability/error-budget-check.json ]; then
+            echo "- error budget check: recorded" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- error budget check: missing" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -f artifacts/preprod/synthetic-smoke.json ]; then
+            echo "- synthetic smoke artifact: generated" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- synthetic smoke artifact: missing" >> "$GITHUB_STEP_SUMMARY"
+          fi

@@ -1,9 +1,10 @@
+import { randomUUID } from 'node:crypto';
 import type { PrismaClient } from '@prisma/client';
 import type { DonationStatus } from '@prisma/client';
 
 export async function seedDonations(count: number, options: { status?: DonationStatus } = {}) {
   const donations = Array.from({ length: count }, (_, i) => ({
-    id: `donation-${i}-${Date.now()}`,
+    id: randomUUID(),
     amount: 1000 + (i % 10) * 1000,
     currency: 'usd',
     status: options.status || (['PENDING', 'SUCCEEDED', 'EXPIRED'] as DonationStatus[])[i % 3],
@@ -19,7 +20,7 @@ export async function seedDonations(count: number, options: { status?: DonationS
 
 export async function seedContactRequests(count: number) {
   return Array.from({ length: count }, (_, i) => ({
-    id: `contact-${i}-${Date.now()}`,
+    id: randomUUID(),
     name: `Contact ${i}`,
     email: `contact${i}@example.com`,
     message: `Test message ${i}`,
@@ -31,7 +32,7 @@ export async function seedContactRequests(count: number) {
 
 export async function seedAdminUsers(count: number) {
   return Array.from({ length: count }, (_, i) => ({
-    id: `admin-${i}-${Date.now()}`,
+    id: randomUUID(),
     email: `admin${i}@agrobridge.org`,
     passwordHash: '$2a$10$abcdefghijklmnopqrstuvwxyz',
     role: i === 0 ? 'SUPER_ADMIN' : ('ADMIN' as const),

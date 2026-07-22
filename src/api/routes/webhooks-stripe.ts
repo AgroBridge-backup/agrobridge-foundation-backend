@@ -24,10 +24,12 @@ export async function stripeWebhookRoutes(app: FastifyInstance) {
       }
 
       const rawBody = req.rawBody;
-      if (!rawBody || typeof rawBody === 'string') {
+      if (!rawBody) {
         reply.status(400);
         return { ok: false, error: { code: 'VALIDATION_ERROR', message: 'Missing raw body' } };
       }
+      const payloadBuffer =
+        typeof rawBody === 'string' ? Buffer.from(rawBody, 'utf8') : rawBody;
 
       const handler = new StripeWebhookHandler(
         app.stripe,
@@ -37,7 +39,7 @@ export async function stripeWebhookRoutes(app: FastifyInstance) {
       );
 
       try {
-        await handler.handle(rawBody, signature);
+        await handler.handle(payloadBuffer, signature);
       } catch (err) {
         if (err instanceof Error && err.message === 'Invalid Stripe signature') {
           reply.status(400);

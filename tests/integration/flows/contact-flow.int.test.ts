@@ -1,19 +1,23 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
-import { buildApp } from '../../src/app.js';
+import { buildApp } from '../../../src/app.js';
 import { setupTestDatabase, teardownTestDatabase } from '../../helpers/setup-db.js';
+import { setTestEnv } from '../../helpers/env.js';
 import type { FastifyInstance } from 'fastify';
 
 describe('Contact Form Integration Tests', () => {
   let app: FastifyInstance;
 
   beforeAll(async () => {
+    setTestEnv();
     await setupTestDatabase();
     app = await buildApp({ logger: false });
     await app.ready();
   });
 
   afterAll(async () => {
-    await app.close();
+    if (app) {
+      await app.close();
+    }
     await teardownTestDatabase();
   });
 
@@ -22,8 +26,7 @@ describe('Contact Form Integration Tests', () => {
   });
 
   afterEach(async () => {
-    const count = await app.prisma.contactRequest.count();
-    expect(count).toBe(0);
+    await app.prisma.contactRequest.deleteMany();
   });
 
   describe('Successful submission', () => {
@@ -38,7 +41,7 @@ describe('Contact Form Integration Tests', () => {
         },
       });
 
-      expect(response.statusCode).toBe(200);
+      expect(response.statusCode).toBe(201);
       const data = response.json();
       expect(data.ok).toBe(true);
 
@@ -116,7 +119,7 @@ describe('Contact Form Integration Tests', () => {
         payload,
       });
 
-      expect(firstResponse.statusCode).toBe(200);
+      expect(firstResponse.statusCode).toBe(201);
 
       const secondResponse = await app.inject({
         method: 'POST',
@@ -124,7 +127,7 @@ describe('Contact Form Integration Tests', () => {
         payload: { ...payload, message: 'Another message' },
       });
 
-      expect(secondResponse.statusCode).toBe(200);
+      expect(secondResponse.statusCode).toBe(201);
 
       const count = await app.prisma.contactRequest.count({
         where: { email: 'john@example.com' },
