@@ -16,10 +16,13 @@
 # without real values. Per CLAUDE.md, do NOT enable live Stripe webhooks
 # until the service is stable; use test-mode keys for first boot.
 #
-# Redis intentionally unset: /api/health only checks the DB, and rate
-# limiting falls back to in-memory. The frontend config still points at the
-# dead onrender.com URL — updating agrobridge-foundation-web to
-# https://api.agrobridgefoundation.org is a separate follow-up.
+# Redis IS required: buildApp() registers the Redis plugin at startup and
+# hangs if REDIS_URL is unreachable (the in-memory rate-limit fallback only
+# kicks in AFTER a live connection, not at boot) — so an in-app valkey
+# component is provided below. TODO: make the Redis plugin fail-open at
+# startup so a Redis outage can't block boot.
+# Follow-up: the frontend (agrobridge-foundation-web) still points at the dead
+# onrender.com URL — repoint it to https://api.agrobridgefoundation.org.
 name: foundation-api
 region: sfo
 alerts:
@@ -57,6 +60,10 @@ services:
         scope: RUN_TIME
         type: SECRET
         value: CHANGE_ME__DATABASE_URL
+      # In-app valkey (below), plain redis:// on the private network.
+      - key: REDIS_URL
+        scope: RUN_TIME
+        value: redis://redis:6379
       # Shared 1GB cluster (~22 backend conns total across 5 apps) — keep low
       - key: DB_POOL_MAX
         scope: RUN_TIME
@@ -85,3 +92,15 @@ services:
       - key: CORS_ORIGIN
         scope: RUN_TIME
         value: https://www.agrobridgefoundation.org,https://agrobridgefoundation.org
+  # Private Valkey for rate limiting — internal-only, no public route.
+  - name: redis
+    image:
+      registry_type: DOCKER_HUB
+      registry: valkey
+      repository: valkey
+      tag: 8-alpine
+    run_command: valkey-server --maxmemory 200mb --maxmemory-policy noeviction --save ''
+    internal_ports:
+      - 6379
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-0.5gb
