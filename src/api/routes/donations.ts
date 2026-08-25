@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 
+import { AppError } from '../../errors/app-error.js';
 import { ok, fail } from '../../http/response.js';
 import { DonationRepository } from '../../repositories/donation-repo.js';
 import { DonationService } from '../../services/donation-service.js';
@@ -12,33 +13,40 @@ import {
 
 export async function donationRoutes(app: FastifyInstance) {
   app.post('/donations/intent', async (req, reply) => {
-    // --- Idempotency check ---
-    // Prevents duplicate Stripe checkout sessions from double-clicks,
-    // network retries, or concurrent requests with the same key.
+    // --- Idempotency: REQUIRED on this money endpoint ---
+    // Prevents duplicate Stripe checkout sessions from double-clicks, network
+    // retries, or concurrent requests. The key is mandatory; the underlying
+    // IdempotencyService fail-closes (503) when its Redis store is unavailable
+    // so the money path is never executed without dedupe protection.
     const idempotencyKey = req.headers['idempotency-key'] as string | undefined;
+    if (!idempotencyKey || !IdempotencyService.isValidKey(idempotencyKey)) {
+      reply.status(400);
+      return fail({
+        code: 'VALIDATION_ERROR',
+        message: 'Idempotency-Key header (UUID v4) is required',
+      });
+    }
 
-    if (idempotencyKey) {
-      if (!IdempotencyService.isValidKey(idempotencyKey)) {
-        reply.status(400);
-        return fail({
-          code: 'VALIDATION_ERROR',
-          message: 'Idempotency-Key must be a valid UUID v4',
-        });
-      }
-
-      const idempotencyService = getIdempotencyService();
+    const idempotencyService = getIdempotencyService();
+    try {
       const result = await idempotencyService.execute(idempotencyKey, async () => {
         const session = await createDonationSession(app, req);
         return { status: 200, body: ok(session) };
       });
-
       reply.status(result.status);
       return result.body;
+    } catch (err) {
+      // Fail-closed idempotency: store unavailable → 503 (retry). Never run the
+      // money path unprotected; let other errors propagate to the global handler.
+      if (err instanceof AppError && err.statusCode === 503) {
+        reply.status(503);
+        return fail({
+          code: 'SERVICE_UNAVAILABLE',
+          message: 'Payment processing temporarily unavailable. Please retry.',
+        });
+      }
+      throw err;
     }
-
-    // No idempotency key — execute directly (backwards compatible)
-    const session = await createDonationSession(app, req);
-    return ok(session);
   });
 }
 

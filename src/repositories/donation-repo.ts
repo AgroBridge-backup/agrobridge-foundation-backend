@@ -93,6 +93,7 @@ export class DonationRepository {
     status: DonationStatus,
     webhookEventId: string,
     stripeSubscriptionId?: string,
+    fromStatus?: DonationStatus,
   ) {
     return withDbSpan({
       name: 'db.donation.transactional_status_update',
@@ -105,12 +106,52 @@ export class DonationRepository {
             data: { processed: true },
           });
           if (claim.count === 0) return; // already processed by another run
+          // State-machine guard: only flip donations currently in `fromStatus`.
+          // Prevents illegal transitions (e.g. a late `checkout.session.expired`
+          // downgrading a donation that already became SUCCEEDED, or a refund
+          // flip on an already-terminal row). When `fromStatus` is omitted
+          // (legacy callers/tests), the guard is skipped for compatibility.
           await tx.donation.updateMany({
-            where: { stripeSessionId },
+            where: {
+              stripeSessionId,
+              ...(fromStatus ? { status: fromStatus } : {}),
+            },
             data: {
               status,
               ...(stripeSubscriptionId ? { stripeSubscriptionId } : {}),
             },
+          });
+        }),
+    });
+  }
+
+  /**
+   * Atomic status update keyed by donation id (rather than stripe session id),
+   * with the same exact-once webhook-event claim + state-machine guard as
+   * `transactionalStatusUpdate`. Used by event handlers that resolve the
+   * donation via charge metadata (e.g. charge.refunded → REFUNDED), where the
+   * session id is not directly available.
+   */
+  transactionalStatusUpdateById(
+    donationId: string,
+    fromStatus: DonationStatus,
+    status: DonationStatus,
+    webhookEventId: string,
+  ) {
+    return withDbSpan({
+      name: 'db.donation.transactional_status_update_by_id',
+      model: 'Donation',
+      operation: 'transaction',
+      fn: async () =>
+        this.prisma.$transaction(async (tx) => {
+          const claim = await tx.webhookEvent.updateMany({
+            where: { id: webhookEventId, processed: false },
+            data: { processed: true },
+          });
+          if (claim.count === 0) return;
+          await tx.donation.updateMany({
+            where: { id: donationId, status: fromStatus },
+            data: { status },
           });
         }),
     });
