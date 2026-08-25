@@ -212,7 +212,11 @@ export async function buildApp(opts: BuildAppOptions = {}) {
 
       // Add consistent HTTP attributes for querying.
       span.setAttribute(semconv.ATTR_HTTP_REQUEST_METHOD, req.method);
-      span.setAttribute(semconv.ATTR_URL_PATH, req.url);
+      // ATTR_URL_PATH is the path only — strip the query so PII/params never
+      // reach the span (req.url includes the query string).
+      const urlPath = req.url ?? '/';
+      const queryIndex = urlPath.indexOf('?');
+      span.setAttribute(semconv.ATTR_URL_PATH, queryIndex >= 0 ? urlPath.slice(0, queryIndex) : urlPath);
     }
 
     // Provide request-scoped logger to lower layers.

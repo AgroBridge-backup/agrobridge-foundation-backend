@@ -113,6 +113,19 @@ const errorTimestamps: Map<string, number[]> = new Map();
 const RATE_WINDOW_MS = 60000; // 1 minute window
 
 /**
+ * Normalize an endpoint label before it reaches a metric.
+ *
+ * Belt-and-suspenders guard against unbounded cardinality / PII leakage: even
+ * if a caller passes a raw URL, strip the query string and cap the length so the
+ * label set stays small. Callers should still prefer route templates.
+ */
+function sanitizeEndpoint(endpoint: string): string {
+  const queryIndex = endpoint.indexOf('?');
+  const path = queryIndex >= 0 ? endpoint.slice(0, queryIndex) : endpoint;
+  return path.length > 200 ? path.slice(0, 200) : path;
+}
+
+/**
  * Record an error with full dimensions
  */
 export function recordError(opts: {
@@ -124,7 +137,8 @@ export function recordError(opts: {
   userType: 'anonymous' | 'authenticated' | 'admin';
   latencyMs: number | undefined;
 }): void {
-  const { category, code, severity, endpoint, userId, userType = 'anonymous', latencyMs } = opts;
+  const { category, code, severity, userId, userType = 'anonymous', latencyMs } = opts;
+  const endpoint = sanitizeEndpoint(opts.endpoint);
 
   // Increment total error counter
   errorRateTotal.inc({ category, code, severity, endpoint });

@@ -1,5 +1,6 @@
 import type { PrismaClient } from '@prisma/client';
 
+import { redactStripePayload } from '../lib/webhook-pii-redactor.js';
 import { withDbSpan } from '../observability/db-span.js';
 
 export class WebhookEventRepository {
@@ -16,7 +17,9 @@ export class WebhookEventRepository {
             data: {
               id: input.id,
               type: input.type,
-              rawPayload: input.rawPayload,
+              // Redact PII (donor email, billing details, card fingerprints/bin)
+              // at write time so the persisted event is safe to retain.
+              rawPayload: redactStripePayload(input.rawPayload),
               processed: false,
             },
           });

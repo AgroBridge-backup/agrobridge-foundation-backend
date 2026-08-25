@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { trace } from '@opentelemetry/api';
 
 import { Errors } from '../errors/app-error.js';
+import { requestContext } from '../observability/request-context.js';
 import { ContactRequestRepository } from '../repositories/contact-request-repo.js';
 import {
   sanitizeContactForm,
@@ -97,13 +98,19 @@ export class ContactService {
         if (sanitized.xssDetected) {
           span.setAttribute('security.xss_detected', true);
           span.setAttribute('security.xss_patterns', sanitized.patterns.join(','));
-          
-          // Log security event (in production, send to SIEM)
-          console.warn('[SECURITY] XSS attempt detected in contact form', {
-            patterns: sanitized.patterns,
-            emailHash: await this.hashForLogging(email),
-            timestamp: new Date().toISOString(),
-          });
+
+          // Route through the structured, request-scoped logger. Only the
+          // (already hashed) email digest is emitted — never the raw message
+          // or email, which are PII.
+          const log = requestContext.getLog();
+          log?.warn(
+            {
+              securityEvent: 'xss_attempt',
+              patterns: sanitized.patterns,
+              emailHash: await this.hashForLogging(email),
+            },
+            'XSS attempt detected in contact form',
+          );
         }
 
         // Validate that sanitization produced valid data

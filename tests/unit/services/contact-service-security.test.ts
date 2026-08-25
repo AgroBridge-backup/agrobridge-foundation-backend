@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { requestContext } from '../../src/observability/request-context.js';
 import { ContactService } from '../../src/services/contact-service.js';
 import {
   sanitizePlainText,
@@ -325,8 +326,17 @@ describe('ContactService XSS Prevention', () => {
   });
 
   it('handles XSS detection logging', async () => {
-    const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    
+    // XSS detection now routes through the structured, request-scoped logger
+    // (not console.warn) so it integrates with the pipeline and never leaks PII.
+    const warn = vi.fn();
+    const mockLog = {
+      warn,
+      info: vi.fn(),
+      debug: vi.fn(),
+      error: vi.fn(),
+    } as any;
+    requestContext.run(mockLog);
+
     const mockRepo = {
       create: vi.fn(async (data: { name: string; email: string; message: string }) => ({
         id: 'test-id',
@@ -335,7 +345,7 @@ describe('ContactService XSS Prevention', () => {
     };
 
     const service = new ContactService(mockRepo as any);
-    
+
     await service.create({
       name: 'Test',
       email: 'test@example.com',
@@ -345,16 +355,19 @@ describe('ContactService XSS Prevention', () => {
       message: 'Hello world <img src=x onerror=alert(1)>',
     });
 
-    expect(consoleSpy).toHaveBeenCalledWith(
-      '[SECURITY] XSS attempt detected in contact form',
+    expect(warn).toHaveBeenCalledWith(
       expect.objectContaining({
+        securityEvent: 'xss_attempt',
         patterns: expect.any(Array),
         emailHash: expect.any(String),
-        timestamp: expect.any(String),
-      })
+      }),
+      'XSS attempt detected in contact form',
     );
 
-    consoleSpy.mockRestore();
+    // PII guarantee: the raw email and message must never reach the logger.
+    const serialized = JSON.stringify(warn.mock.calls[0]);
+    expect(serialized).not.toContain('test@example.com');
+    expect(serialized).not.toContain('Hello world');
   });
 
   it('preserves valid content after sanitization', async () => {

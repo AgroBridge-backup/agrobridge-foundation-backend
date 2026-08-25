@@ -34,6 +34,38 @@ describe('WebhookEventRepository', () => {
       expect(result).toEqual({ created: true, alreadyProcessed: false });
     });
 
+    it('redacts PII from rawPayload before persisting', async () => {
+      mockPrisma.webhookEvent.create.mockResolvedValue(webhookEventFixtures.unprocessed);
+
+      const rawPayload = JSON.stringify({
+        id: 'evt_pii',
+        type: 'checkout.session.completed',
+        data: {
+          object: {
+            id: 'cs_pii',
+            amount_total: 2500,
+            customer_email: 'donor@example.com',
+            customer_details: { email: 'donor@example.com', name: 'Donor' },
+          },
+        },
+      });
+
+      await repo.createIfNotExists({ id: 'evt_pii', type: 'checkout.session.completed', rawPayload });
+
+      const createCall = mockPrisma.webhookEvent.create.mock.calls[0][0];
+      const stored = JSON.parse(createCall.data.rawPayload);
+
+      // Operational fields preserved.
+      expect(stored.id).toBe('evt_pii');
+      expect(stored.data.object.id).toBe('cs_pii');
+      expect(stored.data.object.amount_total).toBe(2500);
+
+      // PII never reaches the database.
+      expect(stored.data.object.customer_email).toBe('[REDACTED]');
+      expect(stored.data.object.customer_details).toBe('[REDACTED]');
+      expect(createCall.data.rawPayload).not.toContain('donor@example.com');
+    });
+
     it('reports alreadyProcessed when a duplicate event was fully processed', async () => {
       const error = new Error('Unique constraint violation') as any;
       error.code = 'P2002';

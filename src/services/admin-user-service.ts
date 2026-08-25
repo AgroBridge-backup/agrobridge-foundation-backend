@@ -85,7 +85,8 @@ export class AdminUserService {
         const { email, password, role, firstName, lastName } = parsed.data;
         const normalizedEmail = email.toLowerCase().trim();
 
-        span.setAttribute('admin_user.email', normalizedEmail);
+        // Do NOT emit the email (PII) to telemetry. Correlation is served by
+        // admin_user.id, which is set on the span once the row is created below.
         span.setAttribute('admin_user.role', role);
 
         // Check if email already exists (including soft-deleted)
