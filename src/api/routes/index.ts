@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 
 import { adminRoutes } from './admin.js';
 import { adminContactRoutes } from './admin-contacts.js';
+import { adminDisbursementRoutes } from './admin-disbursements.js';
 import { adminUserRoutes } from './admin-users.js';
 import { authRoutes } from './auth.js';
 import { campaignRoutes } from './campaigns.js';
@@ -30,5 +31,6 @@ export function registerRoutes(app: FastifyInstance) {
   // Admin routes (JWT-protected)
   app.register(adminRoutes, { prefix: '/api' });
   app.register(adminContactRoutes, { prefix: '/api' });
+  app.register(adminDisbursementRoutes, { prefix: '/api' });
   app.register(adminUserRoutes, { prefix: '/api' });
 }
